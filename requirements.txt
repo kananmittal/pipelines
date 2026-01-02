@@ -4,3 +4,11 @@ requests
 pdf2image
 Pillow
 flake8
+opencv-python
+paddlepaddle-gpu
+paddleocr
+transformers
+qwen-vl-utils
+bitsandbytes
+accelerate
+pymupdf
