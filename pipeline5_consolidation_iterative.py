@@ -49,7 +49,8 @@ class Pipeline5ConsolidationIterative:
         visual_context = ""
         if os.path.exists(pdf_path):
             vp = VisionProcessor()
-            ollama = OllamaInterface()
+            # Use explicit vision model for PPT analysis
+            ollama = OllamaInterface(model_name=self.config.VISION_MODEL)
             images = vp.load_pdf_as_images(pdf_path)
             slide_summaries = []
             for i, img in enumerate(images):

@@ -65,7 +65,7 @@ class Pipeline3Parallel:
         visual_extraction = ""
         if os.path.exists(pdf_path):
             vp = VisionProcessor()
-            ollama = OllamaInterface()
+            ollama = OllamaInterface(model_name=self.config.VISION_MODEL)
             images = vp.load_pdf_as_images(pdf_path)
             
             visual_facts_list = []

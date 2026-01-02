@@ -25,12 +25,17 @@ class Pipeline1Direct:
     def __init__(self, model_name: str = "qwen2.5vl"):
         self.config = Config()
         # Use Qwen2.5-VL for vision tasks
-        self.model_name = model_name 
+        self.model_name = model_name if model_name != "qwen2.5vl" else self.config.VISION_MODEL
         self.vision_processor = VisionProcessor()
-        # We need LLMInterface for the Gemini Hallucination Score
+        # We need LLMInterface for the Gemini Hallucination Score and Text Chat (Llama3)
         from models.llm_interface import LLMInterface
-        self.llm = LLMInterface(model_name=self.model_name)
-        self.ollama = self.llm.ollama
+        self.llm = LLMInterface() # Defaults to Config.TEXT_MODEL (llama3) for text tasks
+        # However, Pipeline 1 is "Visual Only", meaning it extracts facts using Vision Model
+        # But maybe it wants to use the VISION model for everything?
+        # User said: "qwen2.5-vl for ppt processing ... answering llm model is llama 3"
+        # So we should use Llama 3 (self.llm.ollama) for the "chat" part (Step 2)
+        # And use Qwen2.5-VL explicitly for the extraction part (Step 1)
+        self.ollama = self.llm.ollama # This is now Llama 3
         
         logger.info(f"Pipeline 1 (Visual-Only) initialized with model: {self.model_name}")
     

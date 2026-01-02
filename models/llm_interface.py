@@ -15,9 +15,19 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 class LLMInterface:
-    def __init__(self, model_name: str = "qwen2.5vl"):
-        self.model_name = model_name
-        self.ollama = OllamaInterface(model_name=model_name)
+    def __init__(self, model_name: str = None):
+        from config import Config
+        self.config = Config()
+        
+        # Determine model names
+        # Default to Config.TEXT_MODEL ("llama3") for text tasks if not provided
+        self.model_name = model_name or self.config.TEXT_MODEL
+        
+        # Initialize Ollama for TEXT tasks (e.g. Llama 3)
+        self.ollama = OllamaInterface(model_name=self.model_name)
+        logger.info(f"LLM Interface: Text Model initialized as {self.model_name}")
+        
+        # Vision tasks should use Config.VISION_MODEL ("qwen2.5-vl") externally via VisionProcessor
         
         # Initialize Gemini for Judge Layer
         api_key = os.getenv("GEMINI_API_KEY")
