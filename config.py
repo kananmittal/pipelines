@@ -6,6 +6,13 @@ class Config:
         self.TEXT_MODEL = "llama3"
         self.VISION_MODEL = "qwen2.5-vl"
         self.DEFAULT_QUESTION = "What are the key financial highlights and risks?"
+        # List of manual questions to ask if QnA file is missing or parsing fails
+        self.QUESTIONS_LIST = [
+            "What are the key financial highlights?",
+            "What are the operational risks mentioned?",
+            "How is the company performing compared to last year?",
+             # User can add more questions here
+        ]
         self.RESULTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "results")
         
         # Input File Configuration (Standardized)

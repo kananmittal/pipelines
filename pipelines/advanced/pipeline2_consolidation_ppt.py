@@ -6,11 +6,44 @@ Pipeline 2: Consolidation with Integrated High-Accuracy PPT Extraction
 
 import sys
 import os
+import io
 import json
 import logging
 import re
 import cv2
 import numpy as np
+
+import paddle
+import paddle.inference
+
+# --- UNIVERSAL PADDLE PATCH START ---
+# Monkey-patch paddle.inference.create_predictor to force config safety globally
+# This prevents "Illegal Instruction" crashes on CPUs by disabling AVX-512 based IR optimizations
+try:
+    _original_create_predictor = paddle.inference.create_predictor
+except AttributeError:
+    _original_create_predictor = None
+
+def _patched_create_predictor(config):
+    # Depending on version, config might be AnalysisConfig or Config
+    try:
+        if hasattr(config, "switch_ir_optim"):
+            config.switch_ir_optim(False)
+        if hasattr(config, "disable_mkldnn"):
+            config.disable_mkldnn()
+        if hasattr(config, "enable_mkldnn"):
+            # Ensure it's not re-enabled
+            pass 
+    except Exception:
+        pass
+    
+    if _original_create_predictor:
+        return _original_create_predictor(config)
+    return None
+
+if _original_create_predictor:
+    paddle.inference.create_predictor = _patched_create_predictor
+# --- UNIVERSAL PADDLE PATCH END ---
 import fitz  # PyMuPDF
 from PIL import Image
 import torch
@@ -18,6 +51,13 @@ import gc
 from typing import List, Dict, Optional, Tuple, Any
 from collections import OrderedDict
 from datetime import datetime
+
+# Force PaddleOCR to CPU to avoid CUDNN version mismatch with PyTorch
+os.environ["FLAGS_use_gpu"] = "0"
+os.environ["FLAGS_use_mkldnn"] = "0"
+# Limit CPU instruction set to AVX2 to avoid Illegal Instruction (AVX512 mismatch)
+os.environ["DNNL_MAX_CPU_ISA"] = "AVX2"
+os.environ["ONEDNN_MAX_CPU_ISA"] = "AVX2"
 
 # Add project root to path (robust drop-in)
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -758,6 +798,10 @@ class PPTExtractorModule:
         
         # PaddleOCR
         try:
+            # Force CPU for Paddle to avoid CUDNN mismatches (since PyTorch is using GPU fine)
+            os.environ["FLAGS_use_gpu"] = "0"
+            os.environ["FLAGS_use_mkldnn"] = "0"
+            
             from paddleocr import PaddleOCR
             try:
                 # Standard legacy import
@@ -768,19 +812,33 @@ class PPTExtractorModule:
                 from paddleocr import PPStructureV3 as PPStructure
             
             import paddleocr
+            import paddle            
+            # Explicitly force Paddle to use CPU via API
+            # This is more robust than env vars for some versions
+            try:
+                paddle.set_device("cpu")
+                logger.info("   -> Forced Paddle to CPU mode (paddle.set_device('cpu'))")
+            except Exception as e:
+                logger.warning(f"   -> Could not set paddle device to CPU: {e}")
+
             logger.info(f"   -> PaddleOCR Version detected: {paddleocr.__version__}")
             logger.info("   -> Loading PaddleOCR...")
             ppocr_engine = PaddleOCR(
                 use_angle_cls=True,
                 lang='en',
                 ocr_version='PP-OCRv4',
+                enable_mkldnn=False,
+                ir_optim=False,
                 det_db_thresh=0.3,
                 det_db_box_thresh=0.5,
             )
             pp_structure = PPStructure(
                 table=True,
                 ocr=True,
-                layout=True
+                show_log=True,
+                layout=True,
+                enable_mkldnn=False,
+                ir_optim=False
             )
         except ImportError:
             logger.error("❌ PaddleOCR not installed. Please run: pip install paddlepaddle-gpu paddleocr")
@@ -804,7 +862,7 @@ class PPTExtractorModule:
             vlm_model = Qwen2VLForConditionalGeneration.from_pretrained(
                 VLM_MODEL,
                 quantization_config=quantization_config,
-                device_map="cuda:0",
+                device_map="auto",
                 trust_remote_code=True
             )
             
@@ -1061,7 +1119,7 @@ class Pipeline2ConsolidationPPT:
             # Heuristic: Starts with Q/Question/q/question or Number (1.), ends with ?
             # Or just ends with ? and is long enough
             # SIMPLIFIED: If it ends with ? and is at least 15 chars, it's a question.
-            if line.endswith('?') and len(line) > 10:
+            if line.strip().endswith('?') and len(line) > 10:
                  # Clean up prefix if it looks like "1. " or "Q: "
                  q_clean = re.sub(r'^(Q\d*|Question|[\d\.]+)\s?[:\.]?', '', line, flags=re.IGNORECASE).strip()
                  if len(q_clean) > 5:
@@ -1075,10 +1133,11 @@ class Pipeline2ConsolidationPPT:
         """
         start_time = datetime.now()
         
-        if question is None:
-            question = self.config.DEFAULT_QUESTION
+        # NOTE: We do NOT default to self.config.DEFAULT_QUESTION immediately here
+        # so we can detect if we should run the batch list.
+        current_cli_question = question 
         
-        logger.info(f"Pipeline 2 (PPT+): Starting run for question: {question}")
+        logger.info(f"Pipeline 2 (PPT+): Starting run...")
         
         # Process Documents (Steps 1-2) with specific folder
         docs_data = self.process_documents(target_folder=target_folder)
@@ -1094,17 +1153,24 @@ class Pipeline2ConsolidationPPT:
         # Determine Questions list
         questions_to_ask = []
         
-        # 1. Explicit CLI Question
-        if question and question != self.config.DEFAULT_QUESTION:
-            questions_to_ask.append(question)
+        # 1. Explicit CLI Question (Priority 1)
+        if current_cli_question:
+            questions_to_ask.append(current_cli_question)
         
-        # 2. Parse QnA Doc
-        parsed_questions = self.parse_questions_from_text(qna_text)
-        if parsed_questions:
-            logger.info(f"Found {len(parsed_questions)} questions in QnA document.")
-            questions_to_ask.extend(parsed_questions)
+        # 2. Parse QnA Doc (Priority 2)
+        # Only parse if specific question wasn't forced
+        if not questions_to_ask:
+            parsed_questions = self.parse_questions_from_text(qna_text)
+            if parsed_questions:
+                logger.info(f"Found {len(parsed_questions)} questions in QnA document.")
+                questions_to_ask.extend(parsed_questions)
         
-        # 3. Default if empty
+        # 3. Manual Config List (Priority 3)
+        if not questions_to_ask and hasattr(self.config, 'QUESTIONS_LIST') and self.config.QUESTIONS_LIST:
+             logger.info(f"Using {len(self.config.QUESTIONS_LIST)} manual questions from Config.")
+             questions_to_ask.extend(self.config.QUESTIONS_LIST)
+             
+        # 4. Default Single Question (Priority 4 - Fallback)
         if not questions_to_ask:
              logger.info("No questions found in QnA or CLI. Using default question.")
              questions_to_ask.append(self.config.DEFAULT_QUESTION)

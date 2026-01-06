@@ -6,18 +6,60 @@ Pipeline 3: Parallel Extraction with Reconciliation + High-Accuracy PPT Integrat
 
 import sys
 import os
+import io
 import json
 import logging
 import re
+import shutil
+import subprocess
 import cv2
 import numpy as np
 import fitz  # PyMuPDF
 from PIL import Image
 import torch
+
+import paddle
+import paddle.inference
+
+# --- UNIVERSAL PADDLE PATCH START ---
+# Monkey-patch paddle.inference.create_predictor to force config safety globally
+# This prevents "Illegal Instruction" crashes on CPUs by disabling AVX-512 based IR optimizations
+try:
+    _original_create_predictor = paddle.inference.create_predictor
+except AttributeError:
+    _original_create_predictor = None
+
+def _patched_create_predictor(config):
+    # Depending on version, config might be AnalysisConfig or Config
+    try:
+        if hasattr(config, "switch_ir_optim"):
+            config.switch_ir_optim(False)
+        if hasattr(config, "disable_mkldnn"):
+            config.disable_mkldnn()
+        if hasattr(config, "enable_mkldnn"):
+            # Ensure it's not re-enabled
+            pass 
+    except Exception:
+        pass
+    
+    if _original_create_predictor:
+        return _original_create_predictor(config)
+    return None
+
+if _original_create_predictor:
+    paddle.inference.create_predictor = _patched_create_predictor
+# --- UNIVERSAL PADDLE PATCH END ---
 import gc
 from typing import List, Dict, Optional, Tuple, Any
 from collections import OrderedDict
 from datetime import datetime
+
+# Force PaddleOCR to CPU to avoid CUDNN version mismatch with PyTorch
+os.environ["FLAGS_use_gpu"] = "0"
+os.environ["FLAGS_use_mkldnn"] = "0"
+# Limit CPU instruction set to AVX2 to avoid Illegal Instruction
+os.environ["DNNL_MAX_CPU_ISA"] = "AVX2"
+os.environ["ONEDNN_MAX_CPU_ISA"] = "AVX2"
 
 # Add project root to path (robust drop-in)
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -758,6 +800,10 @@ class PPTExtractorModule:
         
         # PaddleOCR
         try:
+            # Force CPU for Paddle to avoid CUDNN mismatches
+            os.environ["FLAGS_use_gpu"] = "0"
+            os.environ["FLAGS_use_mkldnn"] = "1"
+            
             from paddleocr import PaddleOCR
             try:
                 # Standard legacy import
@@ -766,19 +812,32 @@ class PPTExtractorModule:
                 # Newer versions (e.g. 3.x) often expose V3 directly or change structure
                 logger.info("   -> PPStructure not found directly. Attempting to use PPStructureV3...")
                 from paddleocr import PPStructureV3 as PPStructure
+            import paddleocr
+            import paddle
             
+            # Explicitly force Paddle to use CPU
+            try:
+                paddle.set_device("cpu")
+            except:
+                pass
+
             logger.info("   -> Loading PaddleOCR...")
             ppocr_engine = PaddleOCR(
                 use_angle_cls=True,
                 lang='en',
                 ocr_version='PP-OCRv4',
+                enable_mkldnn=False,
+                ir_optim=False,
                 det_db_thresh=0.3,
                 det_db_box_thresh=0.5,
             )
             pp_structure = PPStructure(
                 table=True,
                 ocr=True,
-                layout=True
+                show_log=True,
+                layout=True,
+                enable_mkldnn=False,
+                ir_optim=False
             )
         except ImportError:
             logger.error("❌ PaddleOCR not installed. Please run: pip install paddlepaddle-gpu paddleocr")
@@ -1141,63 +1200,119 @@ Reconciled Summary & Verification Report:"""
             'qna_extraction': qna_extraction
         }
     
-    def run_pipeline(self, question: str = None, target_folder: str = None) -> Dict[str, Any]:
+    def parse_questions_from_text(self, text: str) -> List[str]:
+        """Extract questions from QnA text (heuristic based)"""
+        questions = []
+        if not text:
+            return []
+        
+        # Split by newlines and clean
+        lines = text.split('\n')
+        for line in lines:
+            line = line.strip()
+            # Heuristic: Starts with Q/Question/q/question or Number (1.), ends with ?
+            if line.strip().endswith('?') and len(line) > 10:
+                 # Clean up prefix if it looks like "1. " or "Q: "
+                 q_clean = re.sub(r'^(Q\d*|Question|[\d\.]+)\s?[:\.]?', '', line, flags=re.IGNORECASE).strip()
+                 if len(q_clean) > 5:
+                     questions.append(q_clean)
+        
+        return questions
+
+    def run_pipeline(self, question: str = None, target_folder: str = None) -> List[Dict[str, Any]]:
         """
         Run complete Pipeline 3.
         """
         start_time = datetime.now()
         
-        if question is None:
-            question = self.config.DEFAULT_QUESTION
-            
-        logger.info(f"Pipeline 3 (PPT+): Starting complete pipeline run")
-        logger.info(f"Question: {question}")
+        # NOTE: We do NOT default to self.config.DEFAULT_QUESTION immediately here
+        # so we can detect if we should run the batch list.
+        current_cli_question = question 
         
-        # Parallel Document Processing
+        logger.info(f"Pipeline 3 (PPT+): Starting complete pipeline run")
+        
+        # Step 1: Parallel Document Processing (Run Once)
         docs_data = self.process_documents(target_folder=target_folder)
         if not docs_data:
              logger.error("Document processing failed.")
              return {}
+        
         processed_info = docs_data['reconciled_info']
         visual_extraction = docs_data['visual_extraction']
+        qna_text = docs_data.get('qna_extraction', "")
+        transcript_notes_text = f"Transcript Ext: {docs_data['transcript_extraction']}\nNotes Ext: {docs_data['notes_extraction']}"
         
-        # Step 2: Generate answers
-        logger.info("Pipeline 3 (PPT+): Generating answers")
-        qa_results = self.llm.generate_qa_responses(processed_info, question)
+        # Determine Questions list
+        questions_to_ask = []
         
-        # Step 3: Compute Hallucination Score
-        logger.info("Pipeline 3 (PPT+): Computing Hallucination Score")
-        hallucination_results = self.llm.calculate_hallucination_score(
-            answer=qa_results['best_response']['response'],
-            visual_facts=visual_extraction, 
-            textual_facts=f"Transcript Ext: {docs_data['transcript_extraction']}\nNotes Ext: {docs_data['notes_extraction']}"
-        )
+        # 1. Explicit CLI Question (Priority 1)
+        if current_cli_question:
+            questions_to_ask.append(current_cli_question)
+        
+        # 2. Parse QnA Doc (Priority 2)
+        if not questions_to_ask:
+            parsed_questions = self.parse_questions_from_text(qna_text)
+            if parsed_questions:
+                logger.info(f"Found {len(parsed_questions)} questions in QnA document.")
+                questions_to_ask.extend(parsed_questions)
+        
+        # 3. Manual Config List (Priority 3)
+        if not questions_to_ask and hasattr(self.config, 'QUESTIONS_LIST') and self.config.QUESTIONS_LIST:
+             logger.info(f"Using {len(self.config.QUESTIONS_LIST)} manual questions from Config.")
+             questions_to_ask.extend(self.config.QUESTIONS_LIST)
+             
+        # 4. Default Single Question (Priority 4 - Fallback)
+        if not questions_to_ask:
+             logger.info("No questions found in QnA or CLI. Using default question.")
+             questions_to_ask.append(self.config.DEFAULT_QUESTION)
+             
+        # Dedup
+        questions_to_ask = list(OrderedDict.fromkeys(questions_to_ask))
+        logger.info(f"Pipeline 3 (PPT+): Will process {len(questions_to_ask)} questions.")
+        
+        all_results = []
+        
+        for idx, q in enumerate(questions_to_ask):
+            logger.info(f"--- Processing Question {idx+1}/{len(questions_to_ask)}: {q[:50]}... ---")
+            
+            # Step 2: Generate answers
+            qa_results = self.llm.generate_qa_responses(processed_info, q)
+            
+            # Step 3: Compute Hallucination Score
+            hallucination_results = self.llm.calculate_hallucination_score(
+                answer=qa_results['best_response']['response'],
+                visual_facts=visual_extraction, 
+                textual_facts=transcript_notes_text
+            )
+            
+            res_entry = {
+                'pipeline_name': 'Pipeline 3 (High-Res PPT Integration)',
+                'pipeline_type': 'parallel_extraction_ppt_high_res',
+                'model_used': self.model_name,
+                'question': q,
+                'processed_information': processed_info,
+                'best_answer': {
+                    'answer': qa_results['best_response']['response'],
+                    'temperature': qa_results['best_response']['parameters'].get('temperature', 0.1),
+                    'generation_time': qa_results['best_response']['generation_time']
+                },
+                'hallucination_score': hallucination_results,
+                'ppt_metadata': {
+                    'slides_processed': len(docs_data.get('ppt_structured_data', []))
+                }
+            }
+            all_results.append(res_entry)
         
         end_time = datetime.now()
         execution_time = (end_time - start_time).total_seconds()
         
-        # Compile results
-        results = {
-            'pipeline_name': 'Pipeline 3 (High-Res PPT Integration)',
-            'pipeline_type': 'parallel_extraction_ppt_high_res',
-            'model_used': self.model_name,
-            'question': question,
-            'processed_information': processed_info,
-            'best_answer': {
-                'answer': qa_results['best_response']['response'],
-                'temperature': qa_results['best_response']['parameters'].get('temperature', 0.1),
-                'generation_time': qa_results['best_response']['generation_time']
-            },
-            'hallucination_score': hallucination_results,
-            'execution_time': execution_time,
-            'timestamp': end_time.isoformat(),
-            'ppt_metadata': {
-                'slides_processed': len(docs_data.get('ppt_structured_data', []))
-            }
-        }
+        # Add timestamp to all (or just return list)
+        for r in all_results:
+            r['timestamp'] = end_time.isoformat()
+            r['execution_time'] = execution_time # Total time for batch
         
-        logger.info(f"Pipeline 3 (PPT+) Completed in {execution_time:.2f} seconds")
-        return results
+        logger.info(f"Pipeline 3 (PPT+) Completed processing {len(all_results)} questions in {execution_time:.2f} seconds")
+        return all_results
     
     def save_results(self, results: Dict[str, Any], output_dir: str = None) -> str:
         if output_dir is None:

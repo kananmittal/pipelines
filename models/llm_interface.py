@@ -73,7 +73,7 @@ Return ONLY a JSON object with keys: "analytical_score", "numerical_score", "rea
                     contents=prompt,
                     config=types.GenerateContentConfig(response_mime_type="application/json")
                 )
-                scores = json.loads(response.text)
+                scores = json.loads(response.text, strict=False)
                 
                 # Average the two scores for a final score (0 = factual, 1 = hallucinated)
                 analytical = float(scores.get('analytical_score', 0))
