@@ -61,25 +61,40 @@ Answer to Evaluate:
 Return ONLY a JSON object with keys: "analytical_score", "numerical_score", "reasoning".
 """
         
-        try:
-            response = self.gemini.models.generate_content(
-                model="gemini-2.0-flash",
-                contents=prompt,
-                config=types.GenerateContentConfig(response_mime_type="application/json")
-            )
-            scores = json.loads(response.text)
-            
-            # Average the two scores for a final score (0 = factual, 1 = hallucinated)
-            # Inverting convention if needed, but prompt says 0=factual.
-            analytical = float(scores.get('analytical_score', 0))
-            numerical = float(scores.get('numerical_score', 0))
-            final_score = (analytical + numerical) / 2.0
-            
-            scores['final_score'] = round(final_score, 4)
-            return scores
-        except Exception as e:
-            logger.error(f"Gemini Hallucination Scoring failed: {e}")
-            return {"error": str(e), "final_score": 0.0}
+        # Retry logic for Gemini API (handle 429 Resource Exhausted)
+        max_retries = 5
+        base_delay = 2
+        import time
+
+        for attempt in range(max_retries):
+            try:
+                response = self.gemini.models.generate_content(
+                    model="gemini-2.0-flash",
+                    contents=prompt,
+                    config=types.GenerateContentConfig(response_mime_type="application/json")
+                )
+                scores = json.loads(response.text)
+                
+                # Average the two scores for a final score (0 = factual, 1 = hallucinated)
+                analytical = float(scores.get('analytical_score', 0))
+                numerical = float(scores.get('numerical_score', 0))
+                final_score = (analytical + numerical) / 2.0
+                
+                scores['final_score'] = round(final_score, 4)
+                return scores
+
+            except Exception as e:
+                # Check for rate limit error in string representation
+                if "429" in str(e) or "Too Many Requests" in str(e) or "Resource Exhausted" in str(e):
+                    wait_time = base_delay * (2 ** attempt)
+                    logger.warning(f"Gemini API Rate Limit (429). Retrying in {wait_time}s... (Attempt {attempt + 1}/{max_retries})")
+                    time.sleep(wait_time)
+                else:
+                    logger.error(f"Gemini Hallucination Scoring failed: {e}")
+                    return {"error": str(e), "final_score": 0.0}
+        
+        logger.error(f"Gemini Hallucination Scoring failed after {max_retries} retries.")
+        return {"error": "Max retries exceeded", "final_score": 0.0}
 
     def extract_information(self, text: str, type: str) -> str:
         # Prompt from 'A. Prompts for LLM pipelines' (Extraction)

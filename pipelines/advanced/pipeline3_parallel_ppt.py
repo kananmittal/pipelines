@@ -758,14 +758,19 @@ class PPTExtractorModule:
         
         # PaddleOCR
         try:
-            from paddleocr import PaddleOCR, PPStructure
+            from paddleocr import PaddleOCR
+            try:
+                # Standard legacy import
+                from paddleocr import PPStructure
+            except ImportError:
+                # Newer versions (e.g. 3.x) often expose V3 directly or change structure
+                logger.info("   -> PPStructure not found directly. Attempting to use PPStructureV3...")
+                from paddleocr import PPStructureV3 as PPStructure
             
             logger.info("   -> Loading PaddleOCR...")
             ppocr_engine = PaddleOCR(
                 use_angle_cls=True,
                 lang='en',
-                use_gpu=torch.cuda.is_available(),
-                show_log=False,
                 ocr_version='PP-OCRv4',
                 det_db_thresh=0.3,
                 det_db_box_thresh=0.5,
@@ -773,10 +778,7 @@ class PPTExtractorModule:
             pp_structure = PPStructure(
                 table=True,
                 ocr=True,
-                show_log=False,
-                use_gpu=torch.cuda.is_available(),
-                layout=True,
-                lang='en'
+                layout=True
             )
         except ImportError:
             logger.error("❌ PaddleOCR not installed. Please run: pip install paddlepaddle-gpu paddleocr")
@@ -906,21 +908,89 @@ class Pipeline3ParallelPPT:
         except Exception as e:
             logger.error(f"Failed to initialize PPT Extractor: {e}")
             self.ppt_extractor = None
+            
+        self.current_folder = None
     
-    def process_documents(self) -> Dict[str, Any]:
+    def process_documents(self, target_folder: str = None) -> Dict[str, Any]:
         """
-        Process documents for Pipeline 3.
+        Process documents: Transcript + Notes + PPT (Parallel Extraction)
         """
         logger.info("Pipeline 3 (PPT+): Starting document processing")
         
-        # Load inputs
-        transcript = self.doc_processor.load_transcript()
-        notes = self.doc_processor.load_notes()
-        transcript = self.doc_processor.preprocess_text(transcript)
-        notes = self.doc_processor.preprocess_text(notes)
+        # Handle Batch Folder Logic
+        if target_folder:
+            self.current_folder = target_folder
+        else:
+             if not hasattr(self, 'current_folder') or not self.current_folder:
+                data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../../data")
+                if os.path.exists(data_dir):
+                     subs = [os.path.join(data_dir, d) for d in os.listdir(data_dir) if os.path.isdir(os.path.join(data_dir, d))]
+                     if subs:
+                         self.current_folder = subs[0]
+            
+        if not self.current_folder:
+             logger.error("No target folder specified for processing.")
+             return {}
+             
+        logger.info(f"Processing Folder: {self.current_folder}")
         
-        logger.info(f"Loaded transcript: {len(transcript)} characters")
-        logger.info(f"Loaded notes: {len(notes)} characters")
+        # Helper to resolve paths from config
+        def resolve_path(file_type):
+            for fname in self.config.INPUT_FILES.get(file_type, []):
+                path = os.path.join(self.current_folder, fname)
+                if os.path.exists(path):
+                    return path
+            return None
+
+        # Load Inputs
+        transcript_path = resolve_path("transcript")
+        notes_path = resolve_path("notes")
+        qna_path = resolve_path("qna")
+        
+        # Validation
+        if not transcript_path:
+            logger.error(f"Missing transcript in {self.current_folder}")
+            return {}
+            
+        # Load Content
+        transcript = ""
+        notes = ""
+        qna = ""
+        
+        try:
+             # Transcript (Required)
+             if transcript_path.lower().endswith('.docx'):
+                 transcript = self.doc_processor.preprocess_text(self.doc_processor.read_docx(transcript_path))
+             else:
+                 with open(transcript_path, 'rb') as f:
+                     transcript = self.doc_processor.preprocess_text(self.doc_processor.read_pdf(f))
+                 
+             # Notes (Optional but recommended)
+             if notes_path:
+                 if notes_path.lower().endswith('.docx'):
+                     notes = self.doc_processor.preprocess_text(self.doc_processor.read_docx(notes_path))
+                 else:
+                     with open(notes_path, 'rb') as f:
+                         notes = self.doc_processor.preprocess_text(self.doc_processor.read_pdf(f))
+             else:
+                 logger.warning(f"No notes found in {self.current_folder}, proceeding without notes.")
+                 
+             # QnA (New Integration)
+             if qna_path:
+                 if qna_path.lower().endswith('.docx'):
+                     qna = self.doc_processor.preprocess_text(self.doc_processor.read_docx(qna_path))
+                 else:
+                     with open(qna_path, 'rb') as f:
+                         qna = self.doc_processor.preprocess_text(self.doc_processor.read_pdf(f))
+                 logger.info(f"Loaded QnA: {len(qna)} chars")
+             else:
+                 logger.warning("No QnA file found. Skipping Stream D.")
+
+        except Exception as e:
+            logger.error(f"Error loading files: {e}")
+            return {}
+        
+        logger.info(f"Loaded transcript: {len(transcript)} chars, Notes: {len(notes)} chars")
         
         # ==============================================================================
         # STEP 1: PARALLEL EXTRACTION STREAM (Multi-GPU Parallel Execution)
@@ -931,8 +1001,12 @@ class Pipeline3ParallelPPT:
         
         def run_visual_stream():
             logger.info(" >> Stream C: Extracting from Visuals (High Fidelity) on GPU 0...")
-            # Path adjustment for new folder structure
-            pdf_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "data", "ppt.pdf")
+            # Path adjustment: Look in the current batch folder
+            pdf_path = os.path.join(self.current_folder, "ppt.pdf")
+            if not os.path.exists(pdf_path):
+                 # Try capitalized
+                 pdf_path = os.path.join(self.current_folder, "PPT.pdf")
+
             visual_text = ""
             structured_data = []
             
@@ -970,22 +1044,31 @@ class Pipeline3ParallelPPT:
             return visual_text, structured_data
 
         def run_transcript_stream():
-            logger.info(" >> Stream A: Extracting from Transcript (Text LLM) on GPU 1...")
+            logger.info(" >> Stream A: Extracting from Transcript (Text LLM)...")
             return self.llm.extract_information(transcript, "financial")
 
         def run_notes_stream():
-            logger.info(" >> Stream B: Extracting from Notes (Text LLM) on GPU 1...")
+            if not notes: return "No notes available."
+            logger.info(" >> Stream B: Extracting from Notes (Text LLM)...")
             return self.llm.extract_information(notes, "financial")
+            
+        def run_qna_stream():
+            if not qna: return "No QnA available."
+            logger.info(" >> Stream D: Extracting from QnA (Text LLM)...")
+            return self.llm.extract_information(qna, "financial, strategic, risk")
 
         # Execute in parallel
-        with ThreadPoolExecutor(max_workers=3) as executor:
+        # We have 4 potential streams now: Visual, Transcript, Notes, QnA
+        with ThreadPoolExecutor(max_workers=4) as executor:
             future_visual = executor.submit(run_visual_stream)
             future_transcript = executor.submit(run_transcript_stream)
             future_notes = executor.submit(run_notes_stream)
+            future_qna = executor.submit(run_qna_stream)
             
             visual_extraction_text, ppt_structured_data = future_visual.result()
             transcript_extraction = future_transcript.result()
             notes_extraction = future_notes.result()
+            qna_extraction = future_qna.result()
             
         logger.info("Pipeline 3 (PPT+): Parallel Extraction Completed.")
 
@@ -993,7 +1076,12 @@ class Pipeline3ParallelPPT:
         # STEP 2: RECONCILIATION
         # ==============================================================================
         logger.info("Pipeline 3 (PPT+): Reconciling parallel streams")
-        reconciled_info = self.reconcile_extractions(transcript_extraction, notes_extraction, visual_extraction_text)
+        reconciled_info = self.reconcile_extractions(
+            transcript_extraction, 
+            notes_extraction, 
+            visual_extraction_text,
+            qna_extraction
+        )
         
         # Add metadata back
         reconciled_info['ppt_structured_data'] = ppt_structured_data
@@ -1001,16 +1089,17 @@ class Pipeline3ParallelPPT:
         logger.info("Pipeline 3 (PPT+): Document processing completed")
         return reconciled_info
     
-    def reconcile_extractions(self, transcript_extraction: str, notes_extraction: str, visual_extraction: str = "") -> Dict[str, Any]:
+    def reconcile_extractions(self, transcript_extraction: str, notes_extraction: str, visual_extraction: str = "", qna_extraction: str = "") -> Dict[str, Any]:
         """
-        Reconcile information extracted from transcript, notes, and visuals.
+        Reconcile information extracted from transcript, notes, visuals, and QnA.
         """
-        # Updated Prompt for Hybrid JSON/Text Visuals
+        # Updated Prompt for Hybrid JSON/Text Visuals + QnA
         reconciliation_prompt = f"""You are a strict Judge evaluating financial claims from multiple sources.
-You have three sources of information:
+You have FOUR sources of information:
 1. Transcript (Spoken by executives)
 2. Notes (Written summary)
 3. Visuals (Slides - Hybrid format: Natural language summaries + RAW JSON DATA)
+4. QnA (Unscripted Questions & Answers - Critical for risks and strategic clarity)
 
 Your Task:
 1. Create a unified summary of the financial performance.
@@ -1019,12 +1108,16 @@ Your Task:
    - If the Text says "Revenue up" but Visual chart JSON shows a decline, FLAG THIS as a "Possible Hallucination" or "Contradiction".
    - Explicitly list any discrepancies between what was said and what was shown.
    - If Visuals confirm the Text, note that as "Visually Verified".
+3. **QnA Insights**: Highlight any new risks, clarifications, or strategic shifts revealed ONLY in the QnA section that were missing from the main presentation.
 
 Transcript Extraction:
 {transcript_extraction}
 
 Notes Extraction:
 {notes_extraction}
+
+QnA Extraction:
+{qna_extraction}
 
 Visual Evidence (Slides + JSON):
 {visual_extraction}
@@ -1044,23 +1137,27 @@ Reconciled Summary & Verification Report:"""
             'reconciled_info': reconciled_response['response'],
             'visual_extraction': visual_extraction,
             'transcript_extraction': transcript_extraction,
-            'notes_extraction': notes_extraction
+            'notes_extraction': notes_extraction,
+            'qna_extraction': qna_extraction
         }
     
-    def run_pipeline(self, question: str = None) -> Dict[str, Any]:
+    def run_pipeline(self, question: str = None, target_folder: str = None) -> Dict[str, Any]:
         """
-        Run the complete Pipeline 3 process.
+        Run complete Pipeline 3.
         """
         start_time = datetime.now()
         
         if question is None:
             question = self.config.DEFAULT_QUESTION
-        
+            
         logger.info(f"Pipeline 3 (PPT+): Starting complete pipeline run")
         logger.info(f"Question: {question}")
         
-        # Step 1: Process documents
-        docs_data = self.process_documents()
+        # Parallel Document Processing
+        docs_data = self.process_documents(target_folder=target_folder)
+        if not docs_data:
+             logger.error("Document processing failed.")
+             return {}
         processed_info = docs_data['reconciled_info']
         visual_extraction = docs_data['visual_extraction']
         
@@ -1104,7 +1201,9 @@ Reconciled Summary & Verification Report:"""
     
     def save_results(self, results: Dict[str, Any], output_dir: str = None) -> str:
         if output_dir is None:
-            output_dir = os.path.join(self.config.RESULTS_DIR, "pipeline3_ppt")
+            # Save into results/BatchFolder/
+            batch_name = os.path.basename(self.current_folder) if self.current_folder else "default_batch"
+            output_dir = os.path.join(self.config.RESULTS_DIR, batch_name)
         
         os.makedirs(output_dir, exist_ok=True)
         

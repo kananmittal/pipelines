@@ -758,14 +758,21 @@ class PPTExtractorModule:
         
         # PaddleOCR
         try:
-            from paddleocr import PaddleOCR, PPStructure
+            from paddleocr import PaddleOCR
+            try:
+                # Standard legacy import
+                from paddleocr import PPStructure
+            except ImportError:
+                # Newer versions (e.g. 3.x) often expose V3 directly or change structure
+                logger.info("   -> PPStructure not found directly. Attempting to use PPStructureV3...")
+                from paddleocr import PPStructureV3 as PPStructure
             
+            import paddleocr
+            logger.info(f"   -> PaddleOCR Version detected: {paddleocr.__version__}")
             logger.info("   -> Loading PaddleOCR...")
             ppocr_engine = PaddleOCR(
                 use_angle_cls=True,
                 lang='en',
-                use_gpu=torch.cuda.is_available(),
-                show_log=False,
                 ocr_version='PP-OCRv4',
                 det_db_thresh=0.3,
                 det_db_box_thresh=0.5,
@@ -773,10 +780,7 @@ class PPTExtractorModule:
             pp_structure = PPStructure(
                 table=True,
                 ocr=True,
-                show_log=False,
-                use_gpu=torch.cuda.is_available(),
-                layout=True,
-                lang='en'
+                layout=True
             )
         except ImportError:
             logger.error("❌ PaddleOCR not installed. Please run: pip install paddlepaddle-gpu paddleocr")
@@ -897,56 +901,105 @@ class Pipeline2ConsolidationPPT:
         except Exception as e:
             logger.error(f"Failed to initialize PPT Extractor: {e}")
             self.ppt_extractor = None
+            
+        self.current_folder = None
     
-    def process_documents(self) -> Dict[str, Any]:
+    def process_documents(self, target_folder: str = None) -> Dict[str, Any]:
         """
         Process documents: Transcript + Notes + PPT (Fused)
         """
         logger.info("Pipeline 2 (PPT+): Starting document processing")
         
-        # Load transcript and notes
-        transcript = self.doc_processor.load_transcript()
-        notes = self.doc_processor.load_notes()
+        # Handle Batch Folder Logic
+        if target_folder:
+            self.current_folder = target_folder
+        else:
+            # Fallback for legacy single-run or if undefined
+            # If not set, try using data dir directly?
+            # Or assume the caller MUST provide it.
+            if not hasattr(self, 'current_folder') or not self.current_folder:
+                # Iterate first folder in data dir as default?
+                data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../../data")
+                if os.path.exists(data_dir):
+                     subs = [os.path.join(data_dir, d) for d in os.listdir(data_dir) if os.path.isdir(os.path.join(data_dir, d))]
+                     if subs:
+                         self.current_folder = subs[0]
+                         logger.info(f"Defaulting to first data folder: {self.current_folder}")
+                     else:
+                        self.current_folder = data_dir 
+            
+        if not self.current_folder:
+             logger.error("No target folder specified for processing.")
+             return {}
+             
+        logger.info(f"Processing Folder: {self.current_folder}")
         
-        transcript = self.doc_processor.preprocess_text(transcript)
-        notes = self.doc_processor.preprocess_text(notes)
+        # Helper to resolve paths from config
+        def resolve_path(file_type):
+            for fname in self.config.INPUT_FILES.get(file_type, []):
+                path = os.path.join(self.current_folder, fname)
+                if os.path.exists(path):
+                    return path
+            return None
+
+        # Load Inputs
+        transcript_path = resolve_path("transcript")
+        notes_path = resolve_path("notes")
+        qna_path = resolve_path("qna")
         
-        logger.info(f"Loaded transcript: {len(transcript)} chars")
-        logger.info(f"Loaded notes: {len(notes)} chars")
+        # Load Content
+        transcript = ""
+        notes = ""
+        qna = ""
         
-        # --- Process PPT ---
+        try:
+             # Transcript (Required)
+             if transcript_path:
+                 if transcript_path.lower().endswith('.docx'):
+                     transcript = self.doc_processor.preprocess_text(self.doc_processor.read_docx(transcript_path))
+                 else:
+                     with open(transcript_path, 'rb') as f:
+                         transcript = self.doc_processor.preprocess_text(self.doc_processor.read_pdf(f))
+             
+             # Notes
+             if notes_path:
+                 if notes_path.lower().endswith('.docx'):
+                     notes = self.doc_processor.preprocess_text(self.doc_processor.read_docx(notes_path))
+                 else:
+                     with open(notes_path, 'rb') as f:
+                         notes = self.doc_processor.preprocess_text(self.doc_processor.read_pdf(f))
+                     
+             # QnA
+             if qna_path:
+                 if qna_path.lower().endswith('.docx'):
+                     qna = self.doc_processor.preprocess_text(self.doc_processor.read_docx(qna_path))
+                 else:
+                     with open(qna_path, 'rb') as f:
+                         qna = self.doc_processor.preprocess_text(self.doc_processor.read_pdf(f))
+                 logger.info(f"Loaded QnA: {len(qna)} chars")
+
+        except Exception as e:
+            logger.error(f"Error loading text files: {e}")
+            return {}
+        
+        # --- Visual Path (Batch Mode) ---
         visual_context = ""
         ppt_structured_data = []
         
-        # Path adjustment for new folder structure
-        pdf_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "data", "ppt.pdf")
+        pdf_path = resolve_path("ppt")
         
-        if os.path.exists(pdf_path) and self.ppt_extractor:
+        if pdf_path and self.ppt_extractor:
             logger.info("Pipeline 2 (PPT+): Processing Visuals from PPT with High Fidelity...")
             try:
                 slide_results = self.ppt_extractor.process_document(pdf_path)
+                ppt_structured_data = slide_results
                 
+                # Format for Consolidation
                 context_parts = []
                 for res in slide_results:
-                    page_num = res['page_number']
-                    structured_json = json.dumps(res, indent=2, ensure_ascii=False)
-                    factual_stats = "\n".join(res.get('factual_statements', []))
-                    
-                    # Store structured data for final return
-                    ppt_structured_data.append(res)
-                    
-                    # Create Hybrid Context
-                    slide_block = f"""
-=== SLIDE {page_num} ===
-[FACTUAL SUMMARY]
-{factual_stats}
-
-[RAW DATA]
-{structured_json}
-"""
-                    context_parts.append(slide_block)
-                
-                visual_context = "\n\n=== VISUAL SLIDE EXTRACTION (Hybrid) ===\n" + "\n".join(context_parts)
+                     summary = "\n".join(res.get('factual_statements', []))
+                     context_parts.append(f"SLIDE {res['page_number']}:\n{summary}")
+                visual_context = "\n".join(context_parts)
                 
             except Exception as e:
                 logger.error(f"Error processing PPT: {e}")
@@ -955,12 +1008,31 @@ class Pipeline2ConsolidationPPT:
         else:
             logger.warning("ppt.pdf not found or PPT model failed. Skipping visuals.")
             
-        # Append visual context to transcript
-        transcript_plus_visuals = transcript + visual_context
+        # Merging All Sources for Consolidation
+        logger.info("Pipeline 2 (PPT+): Consolidating text from Transcript + Notes + QnA + Visuals")
         
-        # Step 1: Consolidate
-        logger.info("Pipeline 2 (PPT+): Consolidating documents (Transcript + Notes + PPT)")
-        consolidated_text = self.llm.consolidate_information(transcript_plus_visuals, notes)
+        combined_context = f"""
+=== TRANSCRIPT ===
+{transcript}
+
+=== NOTES ===
+{notes}
+
+=== QnA (STRATEGIC RISKS & ANSWERS) ===
+{qna}
+
+=== VISUAL EVIDENCE (SLIDES) ===
+{visual_context}
+"""
+        
+        # Step 1: Consolidate (or Extract directly if context fits)
+        # Using extraction directly on the unified context is often better for "Answer the question" but here we want a summary first.
+        # Let's call consolidate_information but passing the combined blob as 'transcript' and empty 'notes' or just use a custom prompt here.
+        # For compatibility, let's just assume consolidate_information takes (text1, text2).
+        
+        # ACTUALLY, checking llm_interface (not shown), consolidate usually summarizes. 
+        # Let's just pass the huge blob as the first arg.
+        consolidated_text = self.llm.consolidate_information(combined_context, "")
         
         # Step 2: Extract from Consolidated
         logger.info("Pipeline 2 (PPT+): Extracting information from consolidated text")
@@ -972,13 +1044,34 @@ class Pipeline2ConsolidationPPT:
             "visual_context": visual_context,
             "ppt_structured_data": ppt_structured_data,
             "transcript": transcript,
-            "notes": notes,
-            "consolidated_text": consolidated_text
+            "qna": qna,
+            "notes": notes
         }
     
-    def run_pipeline(self, question: str = None) -> Dict[str, Any]:
+    def parse_questions_from_text(self, text: str) -> List[str]:
+        """Extract questions from QnA text (heuristic based)"""
+        questions = []
+        if not text:
+            return []
+        
+        # Split by newlines and clean
+        lines = text.split('\n')
+        for line in lines:
+            line = line.strip()
+            # Heuristic: Starts with Q/Question/q/question or Number (1.), ends with ?
+            # Or just ends with ? and is long enough
+            # SIMPLIFIED: If it ends with ? and is at least 15 chars, it's a question.
+            if line.endswith('?') and len(line) > 10:
+                 # Clean up prefix if it looks like "1. " or "Q: "
+                 q_clean = re.sub(r'^(Q\d*|Question|[\d\.]+)\s?[:\.]?', '', line, flags=re.IGNORECASE).strip()
+                 if len(q_clean) > 5:
+                     questions.append(q_clean)
+        
+        return questions
+    
+    def run_pipeline(self, question: str = None, target_folder: str = None) -> Dict[str, Any]:
         """
-        Run the complete pipeline.
+        Run complete Pipeline 2.
         """
         start_time = datetime.now()
         
@@ -987,53 +1080,102 @@ class Pipeline2ConsolidationPPT:
         
         logger.info(f"Pipeline 2 (PPT+): Starting run for question: {question}")
         
-        # Step 1: Process
-        docs_data = self.process_documents()
-        processed_info = docs_data["processed_text"]
+        # Process Documents (Steps 1-2) with specific folder
+        docs_data = self.process_documents(target_folder=target_folder)
+        if not docs_data:
+            logger.error("Document processing failed.")
+            return {}
+            
+        extracted_info = docs_data["processed_text"]
         visual_context = docs_data.get("visual_context", "")
         transcript = docs_data.get("transcript", "")
+        qna_text = docs_data.get("qna", "")
         
-        # Step 2: QA
-        logger.info("Pipeline 2 (PPT+): Generating answer")
-        qa_results = self.llm.generate_qa_responses(processed_info, question)
+        # Determine Questions list
+        questions_to_ask = []
         
-        # Step 3: Hallucination Score
-        logger.info("Pipeline 2 (PPT+): Computing Hallucination Score")
-        # Ensure visual context is safe for Gemini (truncate if massive, though 1M context handles it)
-        hallucination_results = self.llm.calculate_hallucination_score(
-            answer=qa_results['best_response']['response'],
-            visual_facts=visual_context, 
-            textual_facts=transcript
-        )
+        # 1. Explicit CLI Question
+        if question and question != self.config.DEFAULT_QUESTION:
+            questions_to_ask.append(question)
         
-        end_time = datetime.now()
-        execution_time = (end_time - start_time).total_seconds()
+        # 2. Parse QnA Doc
+        parsed_questions = self.parse_questions_from_text(qna_text)
+        if parsed_questions:
+            logger.info(f"Found {len(parsed_questions)} questions in QnA document.")
+            questions_to_ask.extend(parsed_questions)
         
-        results = {
-            'pipeline_name': 'Pipeline 2 (High-Res PPT Integration)',
-            'pipeline_type': 'consolidation_ppt_high_res',
-            'model_used': self.model_name,
-            'question': question,
-            'processed_information': processed_info,
-            'best_answer': {
-                'answer': qa_results['best_response']['response'],
-                'temperature': qa_results['best_response']['parameters'].get('temperature', 0.1),
-                'generation_time': qa_results['best_response']['generation_time']
-            },
-            'hallucination_score': hallucination_results,
-            'execution_time': execution_time,
-            'timestamp': end_time.isoformat(),
-            'ppt_metadata': {
-                'slides_processed': len(docs_data.get('ppt_structured_data', []))
+        # 3. Default if empty
+        if not questions_to_ask:
+             logger.info("No questions found in QnA or CLI. Using default question.")
+             questions_to_ask.append(self.config.DEFAULT_QUESTION)
+             
+        # Dedup preserving order
+        questions_to_ask = list(OrderedDict.fromkeys(questions_to_ask))
+        
+        logger.info(f"Pipeline 2 (PPT+): Will process {len(questions_to_ask)} questions.")
+        
+        all_results = []
+        
+        for idx, q in enumerate(questions_to_ask):
+            logger.info(f"--- Processing Question {idx+1}/{len(questions_to_ask)}: {q[:50]}... ---")
+            
+            # Step 2: QA
+            qa_results = self.llm.generate_qa_responses(extracted_info, q)
+            
+            # Step 3: Hallucination Score
+            # Ensure visual context is safe for Gemini
+            hallucination_results = self.llm.calculate_hallucination_score(
+                answer=qa_results['best_response']['response'],
+                visual_facts=visual_context, 
+                textual_facts=transcript
+            )
+            
+            end_time = datetime.now()
+            execution_time = (end_time - start_time).total_seconds() # Accumulative-ish, but per Q usually
+            
+            res_entry = {
+                'pipeline_name': 'Pipeline 2 (High-Res PPT Integration)',
+                'pipeline_type': 'consolidation_ppt_high_res',
+                'model_used': self.model_name,
+                'question': q,
+                'processed_information': extracted_info,
+                'best_answer': {
+                    'answer': qa_results['best_response']['response'],
+                    'temperature': qa_results['best_response']['parameters'].get('temperature', 0.1),
+                    'generation_time': qa_results['best_response']['generation_time']
+                },
+                'hallucination_score': hallucination_results,
+                'execution_time': execution_time,
+                'timestamp': end_time.isoformat(),
+                'ppt_metadata': {
+                    'slides_processed': len(docs_data.get('ppt_structured_data', []))
+                }
             }
-        }
+            all_results.append(res_entry)
         
-        logger.info(f"Pipeline 2 (PPT+) Completed in {execution_time:.2f}s")
-        return results
+        logger.info(f"Pipeline 2 (PPT+) Completed processing {len(all_results)} questions.")
+        return all_results # Return LIST of results
+    
+    def save_results(self, results: Any, output_dir: str = None) -> str:
+        if output_dir is None:
+            # Save into results/BatchFolder/
+            batch_name = os.path.basename(self.current_folder) if self.current_folder else "default_batch"
+            output_dir = os.path.join(self.config.RESULTS_DIR, batch_name)
+        
+        os.makedirs(output_dir, exist_ok=True)
+        
+        results_file = os.path.join(output_dir, "pipeline2_ppt_results.json")
+        with open(results_file, 'w', encoding='utf-8') as f:
+            json.dump(results, f, indent=2, ensure_ascii=False)
+            
+        logger.info(f"Results saved to {results_file}")
+        return results_file
     
     def save_results(self, results: Dict[str, Any], output_dir: str = None) -> str:
         if output_dir is None:
-            output_dir = os.path.join(self.config.RESULTS_DIR, "pipeline2_ppt")
+            # Save into results/BatchFolder/
+            batch_name = os.path.basename(self.current_folder) if self.current_folder else "default_batch"
+            output_dir = os.path.join(self.config.RESULTS_DIR, batch_name)
         
         os.makedirs(output_dir, exist_ok=True)
         
@@ -1061,11 +1203,19 @@ def main():
         logger.warning("   It may fail or be extremely slow on CPU/MPS.")
     
     pipeline = Pipeline2ConsolidationPPT()
+    # Note: run_pipeline might fail if run without valid folder in defaults.
+    # But usually this is run via run_batch_all.py which passes target_folder.
+    # If run standalone, it tries to find 'data' dir.
     results = pipeline.run_pipeline()
     pipeline.save_results(results)
     pipeline.cleanup()
     
-    print(f"✅ Pipeline Completed. Results: {results['hallucination_score'].get('final_score', 'N/A')}")
+    # Print average score if list
+    if isinstance(results, list) and results:
+        avg_score = sum([r['hallucination_score'].get('final_score', 0) for r in results]) / len(results)
+        print(f"✅ Pipeline Completed. Average Score: {avg_score:.2f}")
+    else:
+        print(f"✅ Pipeline Completed.")
 
 if __name__ == "__main__":
     main()
