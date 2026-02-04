@@ -798,9 +798,19 @@ class PPTExtractorModule:
         
         # PaddleOCR
         try:
-            # Force CPU for Paddle to avoid CUDNN mismatches (since PyTorch is using GPU fine)
-            os.environ["FLAGS_use_gpu"] = "0"
-            os.environ["FLAGS_use_mkldnn"] = "0"
+            # Enable GPU for Paddle if available
+            if torch.cuda.is_available():
+                logger.info("   -> GPU Detected. Enabling GPU for PaddleOCR...")
+                os.environ["FLAGS_use_gpu"] = "1"
+                os.environ["FLAGS_use_mkldnn"] = "0"
+                try:
+                    paddle.set_device("gpu")
+                except:
+                    pass
+            else:
+                logger.info("   -> No GPU Detected. Using CPU for PaddleOCR...")
+                os.environ["FLAGS_use_gpu"] = "0"
+                os.environ["FLAGS_use_mkldnn"] = "1"
             
             from paddleocr import PaddleOCR
             try:
@@ -813,22 +823,18 @@ class PPTExtractorModule:
             
             import paddleocr
             import paddle            
-            # Explicitly force Paddle to use CPU via API
-            # This is more robust than env vars for some versions
-            try:
-                paddle.set_device("cpu")
-                logger.info("   -> Forced Paddle to CPU mode (paddle.set_device('cpu'))")
-            except Exception as e:
-                logger.warning(f"   -> Could not set paddle device to CPU: {e}")
 
             logger.info(f"   -> PaddleOCR Version detected: {paddleocr.__version__}")
             logger.info("   -> Loading PaddleOCR...")
+            use_gpu = torch.cuda.is_available()
+            
             ppocr_engine = PaddleOCR(
                 use_angle_cls=True,
                 lang='en',
                 ocr_version='PP-OCRv4',
-                enable_mkldnn=False,
-                ir_optim=False,
+                use_gpu=use_gpu,
+                enable_mkldnn=not use_gpu,
+                ir_optim=True,
                 det_db_thresh=0.3,
                 det_db_box_thresh=0.5,
             )
@@ -837,8 +843,9 @@ class PPTExtractorModule:
                 ocr=True,
                 show_log=True,
                 layout=True,
-                enable_mkldnn=False,
-                ir_optim=False
+                use_gpu=use_gpu,
+                enable_mkldnn=not use_gpu,
+                ir_optim=True
             )
         except ImportError:
             logger.error("❌ PaddleOCR not installed. Please run: pip install paddlepaddle-gpu paddleocr")

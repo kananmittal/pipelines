@@ -798,9 +798,19 @@ class PPTExtractorModule:
         
         # PaddleOCR
         try:
-            # Force CPU for Paddle to avoid CUDNN mismatches
-            os.environ["FLAGS_use_gpu"] = "0"
-            os.environ["FLAGS_use_mkldnn"] = "1"
+            # Enable GPU for Paddle if available
+            if torch.cuda.is_available():
+                logger.info("   -> GPU Detected. Enabling GPU for PaddleOCR...")
+                os.environ["FLAGS_use_gpu"] = "1"
+                os.environ["FLAGS_use_mkldnn"] = "0"
+                try:
+                    paddle.set_device("gpu")
+                except:
+                    pass
+            else:
+                logger.info("   -> No GPU Detected. Using CPU for PaddleOCR...")
+                os.environ["FLAGS_use_gpu"] = "0"
+                os.environ["FLAGS_use_mkldnn"] = "1"
             
             from paddleocr import PaddleOCR
             try:
@@ -813,19 +823,16 @@ class PPTExtractorModule:
             import paddleocr
             import paddle
             
-            # Explicitly force Paddle to use CPU
-            try:
-                paddle.set_device("cpu")
-            except:
-                pass
-
             logger.info("   -> Loading PaddleOCR...")
+            use_gpu = torch.cuda.is_available()
+            
             ppocr_engine = PaddleOCR(
                 use_angle_cls=True,
                 lang='en',
                 ocr_version='PP-OCRv4',
-                enable_mkldnn=False,
-                ir_optim=False,
+                use_gpu=use_gpu,
+                enable_mkldnn=not use_gpu,
+                ir_optim=True, 
                 det_db_thresh=0.3,
                 det_db_box_thresh=0.5,
             )
@@ -834,8 +841,9 @@ class PPTExtractorModule:
                 ocr=True,
                 show_log=True,
                 layout=True,
-                enable_mkldnn=False,
-                ir_optim=False
+                use_gpu=use_gpu,
+                enable_mkldnn=not use_gpu,
+                ir_optim=True
             )
         except ImportError:
             logger.error("❌ PaddleOCR not installed. Please run: pip install paddlepaddle-gpu paddleocr")
@@ -1245,7 +1253,7 @@ Provide specific feedback."""
         
         return all_results
     
-    def save_results(self, results: Dict[str, Any], output_dir: str = None) -> str:
+    def save_results(self, results: List[Dict[str, Any]], output_dir: str = None) -> str:
         if output_dir is None:
             # Save into results/BatchFolder/
             batch_name = os.path.basename(self.current_folder) if self.current_folder else "default_batch"
@@ -1257,18 +1265,27 @@ Provide specific feedback."""
         with open(results_file, 'w', encoding='utf-8') as f:
             json.dump(results, f, indent=2, ensure_ascii=False)
             
-        # Detailed Log
+        # Detailed Log for EACH question
         log_file = os.path.join(output_dir, "pipeline5_ppt_detailed_log.txt")
         with open(log_file, 'w', encoding='utf-8') as f:
             f.write(f"Pipeline 5 (PPT+): Consolidation + Iterative Refinement - Log\n{'='*50}\n\n")
-            f.write(f"Question: {results['question']}\n\n")
             
-            f.write(f"--- 1. CONSOLIDATED SOURCE (Hybrid) ---\n{(results['intermediate_steps']['consolidated_document'])[:5000]}...\n\n")
-            f.write(f"--- 2. INITIAL EXTRACTION ---\n{results['intermediate_steps']['initial_extraction']}\n\n")
-            f.write(f"--- 3. CRITIQUE ---\n{results['intermediate_steps']['critique']}\n\n")
-            f.write(f"--- 4. REFINED EXTRACTION ---\n{results['processed_information']}\n\n")
-            f.write(f"--- 5. FINAL ANSWER ---\n{results['best_answer']['answer']}\n\n")
-            f.write(f"--- VALIDATION ---\nHallucination Score: {results['hallucination_score'].get('final_score')}\n")
+            for i, res in enumerate(results):
+                f.write(f"QUESTION {i+1}: {res.get('question', 'Unknown')}\n")
+                f.write(f"{'-'*20}\n")
+                
+                inter = res.get('intermediate_steps', {})
+                f.write(f"--- 1. CONSOLIDATED SOURCE (Hybrid) ---\n{(inter.get('consolidated_document', ''))[:5000]}...\n\n")
+                f.write(f"--- 2. INITIAL EXTRACTION ---\n{inter.get('initial_extraction', '')}\n\n")
+                f.write(f"--- 3. CRITIQUE ---\n{inter.get('critique', '')}\n\n")
+                f.write(f"--- 4. REFINED EXTRACTION ---\n{res.get('processed_information', '')}\n\n")
+                
+                best = res.get('best_answer', {})
+                f.write(f"--- 5. FINAL ANSWER ---\n{best.get('answer', '')}\n\n")
+                
+                score = res.get('hallucination_score', {})
+                f.write(f"--- VALIDATION ---\nHallucination Score: {score.get('final_score')}\n")
+                f.write(f"\n{'='*50}\n\n")
             
         logger.info(f"Pipeline 5 results saved to: {results_file}")
         return results_file

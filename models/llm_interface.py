@@ -75,6 +75,13 @@ Return ONLY a JSON object with keys: "analytical_score", "numerical_score", "rea
                 )
                 scores = json.loads(response.text, strict=False)
                 
+                # Handle case where Gemini returns a list
+                if isinstance(scores, list):
+                    if len(scores) > 0:
+                        scores = scores[0]
+                    else:
+                        scores = {}
+
                 # Average the two scores for a final score (0 = factual, 1 = hallucinated)
                 analytical = float(scores.get('analytical_score', 0))
                 numerical = float(scores.get('numerical_score', 0))
