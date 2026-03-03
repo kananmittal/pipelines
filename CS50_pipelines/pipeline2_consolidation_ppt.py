@@ -835,7 +835,6 @@ class PPTExtractorModule:
                 ocr_version='PP-OCRv4',
                 use_gpu=use_gpu,
                 enable_mkldnn=not use_gpu,
-                ir_optim=True,
                 det_db_thresh=0.3,
                 det_db_box_thresh=0.5,
             )
@@ -845,8 +844,7 @@ class PPTExtractorModule:
                 show_log=True,
                 layout=True,
                 use_gpu=use_gpu,
-                enable_mkldnn=not use_gpu,
-                ir_optim=True
+                enable_mkldnn=not use_gpu
             )
         except ImportError:
             logger.error("❌ PaddleOCR not installed. Please run: pip install paddlepaddle-gpu paddleocr")
@@ -984,15 +982,22 @@ class Pipeline2ConsolidationPPT:
             # If not set, try using data dir directly?
             # Or assume the caller MUST provide it.
             if not hasattr(self, 'current_folder') or not self.current_folder:
-                # Iterate first folder in data dir as default?
-                data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../../data")
-                if os.path.exists(data_dir):
-                     subs = [os.path.join(data_dir, d) for d in os.listdir(data_dir) if os.path.isdir(os.path.join(data_dir, d))]
-                     if subs:
-                         self.current_folder = subs[0]
-                         logger.info(f"Defaulting to first data folder: {self.current_folder}")
-                     else:
-                        self.current_folder = data_dir 
+                # Iterate first folder in data dir as default
+                base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                # The user's specific edudata directory can be at root or data/
+                edudata_dir_candidates = [
+                    os.path.join(base_dir, "edudata"),
+                    os.path.join(base_dir, "data", "edudata"),
+                    os.path.join(base_dir, "data")
+                ]
+                
+                for candidate in edudata_dir_candidates:
+                    if os.path.exists(candidate):
+                        subs = [os.path.join(candidate, d) for d in os.listdir(candidate) if os.path.isdir(os.path.join(candidate, d)) and d.isdigit()]
+                        if subs:
+                            self.current_folder = sorted(subs)[0]  # Process the first lecture by default if none specified!
+                            logger.info(f"Defaulting to first data folder: {self.current_folder}")
+                            break
             
         if not self.current_folder:
              logger.error("No target folder specified for processing.")
