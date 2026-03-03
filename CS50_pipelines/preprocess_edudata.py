@@ -87,42 +87,73 @@ def combine_html_in_dir(dir_path, output_docx_path):
 def extract_frames_to_pdf(video_path, output_pdf_path, frame_rate=1/60.0):
     """
     Extracts 1 frame every X seconds (default 60) and compiles them into a single PDF ('ppt.pdf').
+    Includes a fallback to raw ffmpeg if OpenCV fails to decode the video (e.g. AV1 codec errors).
     """
     if not os.path.exists(video_path):
         return
     logger.info(f"Extracting frames from video: {video_path} -> {output_pdf_path}")
     
-    cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened():
-        logger.error(f"Failed to open video: {video_path}")
-        return
-
-    fps = cap.get(cv2.CAP_PROP_FPS)
-    if not fps or fps != fps:
-        fps = 30.0 # fallback
-
-    frame_interval = int(fps / frame_rate) # e.g. 30 fps * 60 seconds = 1800 frames
-    
-    frames_extracted = 0
     images = []
     
-    success, frame = cap.read()
-    count = 0
-    
-    while success:
-        if count % frame_interval == 0:
-            # Convert BGR (cv2) to RGB
-            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            img = Image.fromarray(frame_rgb)
-            images.append(img)
-            frames_extracted += 1
-            if frames_extracted % 10 == 0:
-                logger.info(f"  ... extracted {frames_extracted} frames")
-                
-        success, frame = cap.read()
-        count += 1
+    try:
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            raise Exception("OpenCV failed to open video.")
 
-    cap.release()
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        if not fps or fps != fps:
+            fps = 30.0 # fallback
+
+        frame_interval = int(fps / frame_rate)
+        
+        frames_extracted = 0
+        success, frame = cap.read()
+        count = 0
+        
+        while success:
+            if count % frame_interval == 0:
+                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                img = Image.fromarray(frame_rgb)
+                images.append(img)
+                frames_extracted += 1
+                if frames_extracted % 10 == 0:
+                    logger.info(f"  ... extracted {frames_extracted} frames")
+                    
+            success, frame = cap.read()
+            count += 1
+
+        cap.release()
+    except Exception as e:
+        logger.warning(f"OpenCV extraction failed ({e}), attempting ffmpeg fallback...")
+        
+    # FFMPEG Fallback if OpenCV yielded 0 frames (e.g., AV1 codec unsupported error)
+    if not images:
+        logger.info("Using FFmpeg fallback for extraction...")
+        import tempfile
+        import subprocess
+        
+        with tempfile.TemporaryDirectory() as temp_dir:
+            # -vf fps=1/60 means extract 1 frame every 60 seconds
+            cmd = [
+                "ffmpeg", "-i", video_path,
+                "-vf", f"fps={frame_rate}",
+                os.path.join(temp_dir, "frame_%04d.jpg")
+            ]
+            
+            try:
+                # Suppress ffmpeg massive output
+                subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                
+                # Load extracted frames
+                frame_files = sorted([f for f in os.listdir(temp_dir) if f.endswith('.jpg')])
+                for f in frame_files:
+                    img = Image.open(os.path.join(temp_dir, f))
+                    # Load into memory so we can close the file and delete the temp dir safely
+                    img.load()
+                    images.append(img)
+                logger.info(f"FFmpeg fallback successfully extracted {len(images)} frames.")
+            except Exception as fe:
+                logger.error(f"FFmpeg fallback also failed: {fe}")
     
     if images:
         logger.info(f"Saving {len(images)} frames to {output_pdf_path}")
