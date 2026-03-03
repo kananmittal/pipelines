@@ -61,7 +61,8 @@ os.environ["ONEDNN_MAX_CPU_ISA"] = "AVX2"
 
 # Add project root to path (robust drop-in)
 current_dir = os.path.dirname(os.path.abspath(__file__))
-project_root = os.path.dirname(os.path.dirname(current_dir)) # pipelines/advanced/ -> pipelines/ -> root
+# The script is inside 'CS50_pipelines', so project root is one level up.
+project_root = os.path.dirname(current_dir)
 if project_root not in sys.path:
     sys.path.append(project_root)
 
