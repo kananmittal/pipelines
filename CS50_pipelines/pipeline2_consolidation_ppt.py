@@ -992,8 +992,15 @@ class Pipeline2ConsolidationPPT:
                 for candidate in edudata_dir_candidates:
                     if os.path.exists(candidate):
                         subs = [os.path.join(candidate, d) for d in os.listdir(candidate) if os.path.isdir(os.path.join(candidate, d)) and d.isdigit()]
-                        if subs:
-                            self.current_folder = sorted(subs)[0]  # Process the first lecture by default if none specified!
+                        # Prioritize a folder that actually has a ppt.pdf file in it
+                        valid_subs = [s for s in subs if os.path.exists(os.path.join(s, "ppt.pdf")) or os.path.exists(os.path.join(s, "presentation.pdf"))]
+                        
+                        if valid_subs:
+                            self.current_folder = sorted(valid_subs)[0]
+                            logger.info(f"Defaulting to first data folder WITH visuals: {self.current_folder}")
+                            break
+                        elif subs:
+                            self.current_folder = sorted(subs)[0]  # Fallback to any folder
                             logger.info(f"Defaulting to first data folder: {self.current_folder}")
                             break
             
