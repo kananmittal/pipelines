@@ -139,7 +139,9 @@ def main():
     # We will search for 'data/edudata' or 'data/Edudata'
     edudata_dir_candidates = [
         os.path.join(base_dir, "data", "edudata"),
-        os.path.join(base_dir, "data", "Edudata")
+        os.path.join(base_dir, "data", "Edudata"),
+        os.path.join(base_dir, "edudata"),
+        os.path.join(base_dir, "Edudata")
     ]
     
     edudata_dir = None
