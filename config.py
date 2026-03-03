@@ -17,7 +17,7 @@ class Config:
         
         # Input File Configuration (Standardized)
         self.INPUT_FILES = {
-            "transcript": ["transcript.pdf", "Transcript.pdf", "TRANSCRIPT.pdf"],
+            "transcript": ["transcript.pdf", "Transcript.pdf", "TRANSCRIPT.pdf", "transcript.docx", "Transcript.docx"],
             "notes": ["notes.pdf", "Notes.pdf", "NOTES.pdf", "notes.docx", "Notes.docx"],
             "ppt": ["ppt.pdf", "PPT.pdf", "presentation.pdf"],
             "qna": ["qna.pdf", "QnA.pdf", "QNA.pdf", "questions.pdf", "qna.docx", "QnA.docx"]
