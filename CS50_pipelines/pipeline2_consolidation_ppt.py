@@ -833,7 +833,6 @@ class PPTExtractorModule:
                 use_angle_cls=True,
                 lang='en',
                 ocr_version='PP-OCRv4',
-                use_gpu=use_gpu,
                 enable_mkldnn=not use_gpu,
                 det_db_thresh=0.3,
                 det_db_box_thresh=0.5,
@@ -843,7 +842,6 @@ class PPTExtractorModule:
                 ocr=True,
                 show_log=True,
                 layout=True,
-                use_gpu=use_gpu,
                 enable_mkldnn=not use_gpu
             )
         except ImportError:

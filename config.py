@@ -1,8 +1,19 @@
 import os
 
 class Config:
+    # Add Google Gemini to providers
+    PROVIDERS = {
+        'llama3.2': 'ollama',
+        'qwen2.5:14b': 'ollama',
+        'gemini-1.5-pro': 'google',
+        'gemini-1.5-flash': 'google',
+        'gemini-2.5-flash': 'google'
+    }
+    
+    # Default selection
+    DEFAULT_MODEL = "gemini-2.5-flash"
+
     def __init__(self):
-        self.DEFAULT_MODEL = "llama3" 
         self.TEXT_MODEL = "llama3"
         self.VISION_MODEL = "qwen2.5-vl"
         self.DEFAULT_QUESTION = "What are the key financial highlights and risks?"
