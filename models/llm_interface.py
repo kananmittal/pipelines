@@ -69,7 +69,7 @@ Return ONLY a JSON object with keys: "analytical_score", "numerical_score", "rea
         for attempt in range(max_retries):
             try:
                 response = self.gemini.models.generate_content(
-                    model="gemini-2.0-flash",
+                    model="gemini-2.5-flash",
                     contents=prompt,
                     config=types.GenerateContentConfig(response_mime_type="application/json")
                 )

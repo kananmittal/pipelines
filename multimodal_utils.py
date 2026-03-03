@@ -54,60 +54,74 @@ class VisionProcessor:
 
 class OllamaInterface:
     """
-    Interface for local Ollama instance (Qwen2.5-VL).
+    Interface originally for Ollama, but now routed to Google Gemini (gemini-2.5-flash)
+    to support remote headless servers without local Ollama instances running.
     """
-    def __init__(self, model_name: str = "qwen2.5vl", base_url: str = "http://localhost:11434"):
-        self.model_name = model_name
-        self.base_url = base_url
-        self.api_generate = f"{base_url}/api/generate"
-        self.api_chat = f"{base_url}/api/chat"
-        logger.info(f"Ollama Interface initialized with model: {self.model_name}")
+    def __init__(self, model_name: str = "gemini-2.5-flash", base_url: str = ""):
+        self.model_name = "gemini-2.5-flash"
+        
+        try:
+            from google import genai
+            api_key = os.getenv("GEMINI_API_KEY")
+            if not api_key:
+                logger.warning("GEMINI_API_KEY not found in environment. Gemini tasks may fail.")
+                self.client = None
+            else:
+                self.client = genai.Client(api_key=api_key)
+                logger.info("OllamaInterface automatically re-routed to Gemini 2.5 Flash.")
+        except ImportError:
+            logger.error("google-genai SDK not installed. Please run: pip install google-genai")
+            self.client = None
 
     def analyze_image(self, base64_image: str, prompt: str = "Describe this image in detail.") -> str:
         """
-        Send a Base64 image to Qwen2.5-VL for analysis.
+        Send an image to Gemini for analysis (shimmed from Ollama).
         """
-        logger.info("Sending image to Ollama for analysis...")
-        
-        payload = {
-            "model": self.model_name,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": prompt,
-                    "images": [base64_image]
-                }
-            ],
-            "stream": False 
-        }
-
+        if not self.client:
+            return "Error: Gemini Client not initialized."
+            
+        logger.info("Sending image to Gemini for analysis...")
         try:
-            response = requests.post(self.api_chat, json=payload)
-            response.raise_for_status()
-            result = response.json()
-            description = result.get("message", {}).get("content", "")
+            from google.genai import types
+            
+            # Convert base64 string back to bytes for Gemini Part
+            image_bytes = base64.b64decode(base64_image)
+            
+            response = self.client.models.generate_content(
+                model=self.model_name,
+                contents=[
+                    types.Part.from_bytes(
+                        data=image_bytes,
+                        mime_type='image/jpeg',
+                    ),
+                    prompt
+                ]
+            )
             logger.info("Image analysis completed.")
-            return description
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Ollama API request failed: {e}")
+            return response.text
+        except Exception as e:
+            logger.error(f"Gemini API request failed: {e}")
             return f"Error analyzing image: {e}"
 
     def chat(self, messages: List[Dict[str, str]]) -> str:
         """
-        Standard text-only chat.
+        Standard text-only chat using Gemini 2.5 Flash.
+        Converts Ollama-style message arrays to a simple Gemini string prompt.
         """
-        payload = {
-            "model": self.model_name,
-            "messages": messages,
-            "stream": False
-        }
+        if not self.client:
+            return "Error: Gemini Client not initialized."
+            
+        # Convert Ollama message format to a single text prompt
+        full_prompt = "\n".join([msg.get("content", "") for msg in messages])
         
         try:
-            response = requests.post(self.api_chat, json=payload)
-            response.raise_for_status()
-            return response.json().get("message", {}).get("content", "")
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Ollama Chat failed: {e}")
+            response = self.client.models.generate_content(
+                model=self.model_name,
+                contents=full_prompt
+            )
+            return response.text
+        except Exception as e:
+            logger.error(f"Gemini Chat failed: {e}")
             return f"Error in chat: {e}"
 
 if __name__ == "__main__":
