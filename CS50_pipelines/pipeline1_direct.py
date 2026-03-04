@@ -36,10 +36,11 @@ class Pipeline1Direct:
         # So we should use Llama 3 (self.llm.ollama) for the "chat" part (Step 2)
         # And use Qwen2.5-VL explicitly for the extraction part (Step 1)
         self.ollama = self.llm.ollama # This is now Llama 3
+        self.current_folder = None
         
         logger.info(f"Pipeline 1 (Visual-Only) initialized with model: {self.model_name}")
     
-    def process_documents(self) -> str:
+    def process_documents(self, target_folder: str = None) -> str:
         """
         Process documents for Pipeline 1 (Slides Only).
         
@@ -48,10 +49,44 @@ class Pipeline1Direct:
         """
         logger.info("Pipeline 1: Starting Visual Document processing")
         
-        pdf_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ppt.pdf")
+        # Handle Batch Folder Logic
+        if target_folder:
+            self.current_folder = target_folder
+        else:
+             if not getattr(self, 'current_folder', None):
+                 base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                 edudata_dir_candidates = [
+                     os.path.join(base_dir, "data", "edudata"),
+                     os.path.join(base_dir, "data", "Edudata"),
+                     os.path.join(base_dir, "edudata"),
+                     os.path.join(base_dir, "Edudata")
+                 ]
+                 for candidate in edudata_dir_candidates:
+                     if os.path.exists(candidate):
+                         subs = [os.path.join(candidate, d) for d in os.listdir(candidate) if os.path.isdir(os.path.join(candidate, d)) and d.isdigit()]
+                         # Prioritize a folder that actually has a ppt.pdf file in it
+                         valid_subs = [s for s in subs if os.path.exists(os.path.join(s, "ppt.pdf")) or os.path.exists(os.path.join(s, "presentation.pdf"))]
+                         
+                         if valid_subs:
+                             self.current_folder = sorted(valid_subs)[0]
+                             logger.info(f"Defaulting to first data folder WITH visuals: {self.current_folder}")
+                             break
+                         elif subs:
+                             self.current_folder = sorted(subs)[0]
+                             logger.info(f"Defaulting to first data folder: {self.current_folder}")
+                             break
+
+        if not getattr(self, 'current_folder', None):
+             logger.error("No target folder specified for processing.")
+             return "Error: No target folder specified."
+        
+        pdf_path = os.path.join(self.current_folder, "ppt.pdf")
         if not os.path.exists(pdf_path):
-            logger.error(f"PPT file not found at {pdf_path}")
-            return "Error: ppt.pdf not found."
+             # Try presentation.pdf
+             pdf_path = os.path.join(self.current_folder, "presentation.pdf")
+             if not os.path.exists(pdf_path):
+                 logger.error(f"PPT file not found at {self.current_folder}")
+                 return "Error: ppt.pdf not found."
             
         # 1. Convert PDF to Images
         logger.info(f"Loading slides from: {pdf_path}")
@@ -85,7 +120,7 @@ class Pipeline1Direct:
         logger.info("Pipeline 1: Visual processing completed")
         return full_visual_context
     
-    def run_pipeline(self, question: str = None) -> Dict[str, Any]:
+    def run_pipeline(self, question: str = None, target_folder: str = None) -> Dict[str, Any]:
         """
         Run the complete Pipeline 1 process.
         """
@@ -98,7 +133,7 @@ class Pipeline1Direct:
         logger.info(f"Question: {question}")
         
         # Step 1: Extract Visual Facts
-        visual_facts = self.process_documents()
+        visual_facts = self.process_documents(target_folder=target_folder)
         
         # Step 2: Generate Answer based ONLY on Visuals
         logger.info("Pipeline 1: Generating answer from Visual Facts")

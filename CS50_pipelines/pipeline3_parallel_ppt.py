@@ -404,11 +404,16 @@ class MultiPassVLMExtractor:
         try:
             from qwen_vl_utils import process_vision_info
             
+            # Prevent CUDA OOM by downscaling massive multi-megapixel images
+            # (OCR still gets the 2.5x high-res version, but VLM gets a compressed view)
+            safe_image = image.copy()
+            safe_image.thumbnail((1024, 1024))
+            
             messages = [
                 {
                     "role": "user",
                     "content": [
-                        {"type": "image", "image": image},
+                        {"type": "image", "image": safe_image},
                         {"type": "text", "text": prompt}
                     ]
                 }
@@ -825,16 +830,14 @@ class PPTExtractorModule:
             import paddleocr
             import paddle
             
-            logger.info("   -> Loading PaddleOCR...")
-            use_gpu = torch.cuda.is_available()
+            logger.info("   -> Loading PaddleOCR (CPU mode due to cuDNN limits)...")
+            use_gpu = False # Hardcoded for stability on this server
             
             ppocr_engine = PaddleOCR(
                 use_angle_cls=True,
                 lang='en',
                 ocr_version='PP-OCRv4',
-                use_gpu=use_gpu,
                 enable_mkldnn=not use_gpu,
-                ir_optim=True,
                 det_db_thresh=0.3,
                 det_db_box_thresh=0.5,
             )
@@ -843,9 +846,7 @@ class PPTExtractorModule:
                 ocr=True,
                 show_log=True,
                 layout=True,
-                use_gpu=use_gpu,
-                enable_mkldnn=not use_gpu,
-                ir_optim=True
+                enable_mkldnn=not use_gpu
             )
         except ImportError:
             logger.error("❌ PaddleOCR not installed. Please run: pip install paddlepaddle-gpu paddleocr")
@@ -856,8 +857,8 @@ class PPTExtractorModule:
             from transformers import Qwen2VLForConditionalGeneration, AutoProcessor, BitsAndBytesConfig
             from qwen_vl_utils import process_vision_info
             
-            logger.info("   -> Loading Qwen2-VL-7B (4-bit)...")
-            VLM_MODEL = "Qwen/Qwen2-VL-7B-Instruct"
+            logger.info("   -> Loading Qwen2-VL-2B (4-bit)...")
+            VLM_MODEL = "Qwen/Qwen2-VL-2B-Instruct"
             
             quantization_config = BitsAndBytesConfig(
                 load_in_4bit=True,
@@ -988,14 +989,30 @@ class Pipeline3ParallelPPT:
         if target_folder:
             self.current_folder = target_folder
         else:
-             if not hasattr(self, 'current_folder') or not self.current_folder:
-                data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../../data")
-                if os.path.exists(data_dir):
-                     subs = [os.path.join(data_dir, d) for d in os.listdir(data_dir) if os.path.isdir(os.path.join(data_dir, d))]
-                     if subs:
-                         self.current_folder = subs[0]
-            
-        if not self.current_folder:
+             if not getattr(self, 'current_folder', None):
+                 base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                 edudata_dir_candidates = [
+                     os.path.join(base_dir, "data", "edudata"),
+                     os.path.join(base_dir, "data", "Edudata"),
+                     os.path.join(base_dir, "edudata"),
+                     os.path.join(base_dir, "Edudata")
+                 ]
+                 for candidate in edudata_dir_candidates:
+                     if os.path.exists(candidate):
+                         subs = [os.path.join(candidate, d) for d in os.listdir(candidate) if os.path.isdir(os.path.join(candidate, d)) and d.isdigit()]
+                         # Prioritize a folder that actually has a ppt.pdf file in it
+                         valid_subs = [s for s in subs if os.path.exists(os.path.join(s, "ppt.pdf")) or os.path.exists(os.path.join(s, "presentation.pdf"))]
+                         
+                         if valid_subs:
+                             self.current_folder = sorted(valid_subs)[0]
+                             logger.info(f"Defaulting to first data folder WITH visuals: {self.current_folder}")
+                             break
+                         elif subs:
+                             self.current_folder = sorted(subs)[0]
+                             logger.info(f"Defaulting to first data folder: {self.current_folder}")
+                             break
+
+        if not getattr(self, 'current_folder', None):
              logger.error("No target folder specified for processing.")
              return {}
              

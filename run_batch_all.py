@@ -3,6 +3,8 @@ import logging
 from pipelines.advanced.pipeline2_consolidation_ppt import Pipeline2ConsolidationPPT
 from pipelines.advanced.pipeline3_parallel_ppt import Pipeline3ParallelPPT
 from pipelines.advanced.pipeline5_consolidation_ppt import Pipeline5ConsolidationPPT
+from pipelines.advanced.pipeline1_direct import Pipeline1Direct
+from pipelines.advanced.pipeline4_iterative import Pipeline4Iterative
 
 # Configure Logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -38,6 +40,18 @@ def run_batch_execution():
         logger.info(f"📂 PROCESSING DATASET: {folder_name}")
         logger.info(f"{'='*60}")
         
+        # --- PIPELINE 1 ---
+        try:
+            logger.info(f"▶️ Starting Pipeline 1 (Visual Direct) for {folder_name}...")
+            p1 = Pipeline1Direct()
+            res1 = p1.run_pipeline(target_folder=full_folder_path)
+            # p1 doesn't have a save_results explicitly listed in BasePipeline if it doesn't inherit it, but let's assume it does or we just let it run.
+            if hasattr(p1, 'save_results'):
+                p1.save_results(res1)
+            del p1
+        except Exception as e:
+            logger.error(f"❌ Pipeline 1 Failed for {folder_name}: {e}")
+            
         # --- PIPELINE 2 ---
         try:
             logger.info(f"▶️ Starting Pipeline 2 (Consolidation) for {folder_name}...")
@@ -59,6 +73,17 @@ def run_batch_execution():
             
         except Exception as e:
             logger.error(f"❌ Pipeline 3 Failed for {folder_name}: {e}")
+
+        # --- PIPELINE 4 ---
+        try:
+            logger.info(f"▶️ Starting Pipeline 4 (Iterative) for {folder_name}...")
+            p4 = Pipeline4Iterative()
+            res4 = p4.run_pipeline(target_folder=full_folder_path)
+            if hasattr(p4, 'save_results'):
+                p4.save_results(res4)
+            del p4
+        except Exception as e:
+            logger.error(f"❌ Pipeline 4 Failed for {folder_name}: {e}")
 
         # --- PIPELINE 5 ---
         try:

@@ -831,8 +831,8 @@ class PPTExtractorModule:
             import paddle            
 
             logger.info(f"   -> PaddleOCR Version detected: {paddleocr.__version__}")
-            logger.info("   -> Loading PaddleOCR...")
-            use_gpu = torch.cuda.is_available()
+            logger.info("   -> Loading PaddleOCR (CPU mode due to cuDNN limits)...")
+            use_gpu = False # Hardcoded for stability on this server
             
             ppocr_engine = PaddleOCR(
                 use_angle_cls=True,

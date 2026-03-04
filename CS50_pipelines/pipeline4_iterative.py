@@ -25,32 +25,76 @@ class Pipeline4Iterative:
         self.model_name = model_name or self.config.DEFAULT_MODEL
         self.llm = LLMInterface(self.model_name)
         self.doc_processor = DocumentProcessor()
+        self.current_folder = None
     
-    def process_documents(self) -> Dict[str, Any]:
+    def process_documents(self, target_folder: str = None) -> Dict[str, Any]:
         """
         Process documents for Pipeline 4.
-        
-        Returns:
-            Processed information string
         """
         logger.info("Pipeline 4: Starting document processing")
         
-        # Load only transcript (pages 2-14) - Pipeline 4 uses transcript only
-        transcript = self.doc_processor.load_transcript()
-        
+        # Handle Batch Folder Logic
+        if target_folder:
+            self.current_folder = target_folder
+        else:
+             if not getattr(self, 'current_folder', None):
+                 base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                 edudata_dir_candidates = [
+                     os.path.join(base_dir, "data", "edudata"),
+                     os.path.join(base_dir, "data", "Edudata"),
+                     os.path.join(base_dir, "edudata"),
+                     os.path.join(base_dir, "Edudata")
+                 ]
+                 for candidate in edudata_dir_candidates:
+                     if os.path.exists(candidate):
+                         subs = [os.path.join(candidate, d) for d in os.listdir(candidate) if os.path.isdir(os.path.join(candidate, d)) and d.isdigit()]
+                         # Prioritize a folder that actually has a ppt.pdf file in it
+                         valid_subs = [s for s in subs if os.path.exists(os.path.join(s, "ppt.pdf")) or os.path.exists(os.path.join(s, "presentation.pdf"))]
+                         
+                         if valid_subs:
+                             self.current_folder = sorted(valid_subs)[0]
+                             logger.info(f"Defaulting to first data folder WITH visuals: {self.current_folder}")
+                             break
+                         elif subs:
+                             self.current_folder = sorted(subs)[0]
+                             logger.info(f"Defaulting to first data folder: {self.current_folder}")
+                             break
+
+        if not getattr(self, 'current_folder', None):
+             logger.error("No target folder specified for processing.")
+             return {}
+             
+        # Find transcript
+        transcript_path = None
+        for fname in self.config.INPUT_FILES.get("transcript", []):
+            path = os.path.join(self.current_folder, fname)
+            if os.path.exists(path):
+                transcript_path = path
+                break
+                
+        if not transcript_path:
+             logger.error("No transcript found")
+             return {}
+             
+        if transcript_path.lower().endswith('.docx'):
+            transcript = self.doc_processor.read_docx(transcript_path)
+        else:
+            with open(transcript_path, 'rb') as f:
+                transcript = self.doc_processor.read_pdf(f)
+                
         # Preprocess text
         transcript = self.doc_processor.preprocess_text(transcript)
         
         logger.info(f"Loaded transcript: {len(transcript)} characters")
-        
-        # Step 1: Initial extraction
         logger.info("Pipeline 4: Performing initial extraction (Text Only)")
         initial_extraction = self.llm.extract_information(transcript, "financial")
         
         # --- NEW: Visual Grounding ---
         from multimodal_utils import VisionProcessor, OllamaInterface
         logger.info("Pipeline 4: Visual Grounding - Loading PPT")
-        pdf_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ppt.pdf")
+        pdf_path = os.path.join(self.current_folder, "ppt.pdf")
+        if not os.path.exists(pdf_path):
+             pdf_path = os.path.join(self.current_folder, "presentation.pdf")
         
         visual_critique = "No visual evidence available."
         if os.path.exists(pdf_path):
@@ -105,7 +149,7 @@ Refined Summary:"""
             "transcript": transcript
         }
     
-    def run_pipeline(self, question: str = None) -> Dict[str, Any]:
+    def run_pipeline(self, question: str = None, target_folder: str = None) -> Dict[str, Any]:
         """
         Run the complete Pipeline 4 process.
         
@@ -124,7 +168,11 @@ Refined Summary:"""
         logger.info(f"Question: {question}")
         
         # Step 1: Process documents (initial extraction + self-critique + refinement)
-        docs_data = self.process_documents()
+        docs_data = self.process_documents(target_folder=target_folder)
+        if not docs_data:
+             logger.error("Processing failed")
+             return {}
+             
         processed_info = docs_data["processed_text"]
         visual_evidence = docs_data.get("visual_evidence", "")
         transcript = docs_data.get("transcript", "")
