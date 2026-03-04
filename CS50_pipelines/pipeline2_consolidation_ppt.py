@@ -853,8 +853,8 @@ class PPTExtractorModule:
             from transformers import Qwen2VLForConditionalGeneration, AutoProcessor, BitsAndBytesConfig
             from qwen_vl_utils import process_vision_info
             
-            logger.info("   -> Loading Qwen2-VL-7B (4-bit)...")
-            VLM_MODEL = "Qwen/Qwen2-VL-7B-Instruct"
+            logger.info("   -> Loading Qwen2-VL-2B (4-bit)...")
+            VLM_MODEL = "Qwen/Qwen2-VL-2B-Instruct"
             
             quantization_config = BitsAndBytesConfig(
                 load_in_4bit=True,
