@@ -844,6 +844,7 @@ class PPTExtractorModule:
                 ocr=True,
                 show_log=True,
                 layout=True,
+                use_gpu=use_gpu,
                 enable_mkldnn=not use_gpu
             )
         except ImportError:
