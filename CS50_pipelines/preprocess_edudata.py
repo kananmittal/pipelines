@@ -168,14 +168,17 @@ def main():
     base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     # For remote, data might be just 'edudata' inside data folder
     # We will search for 'data/edudata' or 'data/Edudata'
+    edudata_dir = None
+    # We will search for 'edudata' in the current working directory, 
+    # and also in the script's parent 'data' folder just in case
+    cwd = os.getcwd()
     edudata_dir_candidates = [
+        os.path.join(cwd, "edudata"),
+        os.path.join(cwd, "Edudata"),
         os.path.join(base_dir, "data", "edudata"),
-        os.path.join(base_dir, "data", "Edudata"),
-        os.path.join(base_dir, "edudata"),
-        os.path.join(base_dir, "Edudata")
+        os.path.join(base_dir, "edudata")
     ]
     
-    edudata_dir = None
     for candidate in edudata_dir_candidates:
         if os.path.exists(candidate):
             edudata_dir = candidate
@@ -193,17 +196,22 @@ def main():
     lecture_map = {} # '0' -> {'webm': 'path', 'srt': 'path'}
     
     for f in files_in_root:
-        # Expected format: "1 - Introduction - ...webm" or "1 - Intro...srt"
-        match = re.match(r'^(\d+)\s*-', f)
+        # Expected format: "2 - Search - Lecture 0 - CS50..."
+        # We want to extract '0' from 'Lecture 0'
+        match = re.search(r'Lecture\s+(\d+)', f, re.IGNORECASE)
         if match:
             lec_num = match.group(1)
             if lec_num not in lecture_map:
                 lecture_map[lec_num] = {}
                 
-            if f.endswith('.webm'):
+            if f.endswith('.webm') or f.endswith('.mp4'):
                 lecture_map[lec_num]['webm'] = os.path.join(edudata_dir, f)
-            elif f.endswith('.srt'):
+            elif f.endswith('.srt') or f.endswith('.vtt'):
                 lecture_map[lec_num]['srt'] = os.path.join(edudata_dir, f)
+        else:
+             # Fallback: if there is no "Lecture X" in the name, try to map the first number
+             # but this might be inaccurate for CS50 so we just log a warning
+             logger.warning(f"Could not cleanly identify lecture number for file: {f}")
                 
     # Now process each numbered directory
     dirs_in_root = [d for d in os.listdir(edudata_dir) if os.path.isdir(os.path.join(edudata_dir, d)) and d.isdigit()]
