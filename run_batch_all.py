@@ -20,7 +20,9 @@ def get_data_folders(data_root="edudata"):
     # Filter only digit folders for edudata
     folders = [f for f in folders if f.isdigit()]
     # Sort for consistent execution order
-    return sorted(folders, key=int)
+    sorted_folders = sorted(folders, key=int)
+    # Slice to only return the first element
+    return sorted_folders[0:1]
 
 def run_batch_execution():
     """Run all 3 pipelines on every dataset folder"""
