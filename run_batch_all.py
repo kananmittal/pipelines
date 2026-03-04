@@ -10,8 +10,8 @@ from CS50_pipelines.pipeline4_iterative import Pipeline4Iterative
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-def get_data_folders(data_root="data"):
-    """Get all subfolders in the data directory"""
+def get_data_folders(data_root="edudata"):
+    """Get all subfolders in the edudata directory"""
     if not os.path.exists(data_root):
         logger.error(f"Data directory '{data_root}' not found!")
         return []
@@ -25,9 +25,9 @@ def get_data_folders(data_root="data"):
 def run_batch_execution():
     """Run all 3 pipelines on every dataset folder"""
     
-    data_folders = get_data_folders()
+    data_folders = get_data_folders("edudata")
     if not data_folders:
-        logger.warning("No data folders found in 'data/' directory.")
+        logger.warning("No data folders found in 'edudata/' directory.")
         return
 
     logger.info(f"🚀 Found {len(data_folders)} datasets: {data_folders}")
@@ -37,7 +37,7 @@ def run_batch_execution():
     # Given 20GB VRAM + 128GB RAM (Offloading), we should try to keep one pipeline loaded at a time)
     
     for folder_name in data_folders:
-        full_folder_path = os.path.abspath(os.path.join("data", folder_name))
+        full_folder_path = os.path.abspath(os.path.join("edudata", folder_name))
         logger.info(f"\n{'='*60}")
         logger.info(f"📂 PROCESSING DATASET: {folder_name}")
         logger.info(f"{'='*60}")
