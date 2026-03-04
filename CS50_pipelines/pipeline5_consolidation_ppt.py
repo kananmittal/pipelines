@@ -736,6 +736,11 @@ class IntelligentDataFusion:
         clean_facts = []
         seen = set()
         for f in facts:
+            if isinstance(f, dict):
+                f = " - ".join(f"{k}: {v}" for k, v in f.items())
+            elif not isinstance(f, str):
+                f = str(f)
+                
             if f and f.strip() and f.strip() not in seen:
                 clean_facts.append(f.strip())
                 seen.add(f.strip())
@@ -803,19 +808,15 @@ class PPTExtractorModule:
         
         # PaddleOCR
         try:
-            # Enable GPU for Paddle if available
-            if torch.cuda.is_available():
-                logger.info("   -> GPU Detected. Enabling GPU for PaddleOCR...")
-                os.environ["FLAGS_use_gpu"] = "1"
-                os.environ["FLAGS_use_mkldnn"] = "0"
-                try:
-                    paddle.set_device("gpu")
-                except:
-                    pass
-            else:
-                logger.info("   -> No GPU Detected. Using CPU for PaddleOCR...")
-                os.environ["FLAGS_use_gpu"] = "0"
-                os.environ["FLAGS_use_mkldnn"] = "1"
+            # Force CPU execution to avoid NVIDIA driver / cuDNN library errors on the server
+            logger.info("   -> Forcing CPU for PaddleOCR to bypass cuDNN missing driver error...")
+            os.environ["FLAGS_use_gpu"] = "0"
+            os.environ["FLAGS_use_mkldnn"] = "1"
+            try:
+                import paddle
+                paddle.set_device("cpu")
+            except:
+                pass
             
             from paddleocr import PaddleOCR
             try:
