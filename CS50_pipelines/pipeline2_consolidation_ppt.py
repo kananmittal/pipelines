@@ -958,10 +958,13 @@ class Pipeline2ConsolidationPPT:
         
         # Initialize PPT Extractor
         logger.info("Initializing PPT Extractor Module (Heavy Load)...")
+        print("----> [DEBUG] Starting PPT Extractor Initialization...")
         try:
            self.ppt_extractor = PPTExtractorModule()
+           print("----> [DEBUG] PPT Extractor Initialized SUCCESSFULLY!")
         except Exception as e:
             logger.error(f"Failed to initialize PPT Extractor: {e}")
+            print(f"----> [DEBUG] PPT Extractor FAILED: {e}")
             self.ppt_extractor = None
             
         self.current_folder = None
@@ -994,6 +997,7 @@ class Pipeline2ConsolidationPPT:
                         subs = [os.path.join(candidate, d) for d in os.listdir(candidate) if os.path.isdir(os.path.join(candidate, d)) and d.isdigit()]
                         # Prioritize a folder that actually has a ppt.pdf file in it
                         valid_subs = [s for s in subs if os.path.exists(os.path.join(s, "ppt.pdf")) or os.path.exists(os.path.join(s, "presentation.pdf"))]
+                        print(f"----> [DEBUG] Found valid_subs with ppt.pdf: {valid_subs}")
                         
                         if valid_subs:
                             self.current_folder = sorted(valid_subs)[0]
@@ -1063,6 +1067,8 @@ class Pipeline2ConsolidationPPT:
         ppt_structured_data = []
         
         pdf_path = resolve_path("ppt")
+        print(f"----> [DEBUG] Resolved pdf_path: {pdf_path}")
+        print(f"----> [DEBUG] self.ppt_extractor is: {bool(self.ppt_extractor)}")
         
         if pdf_path and self.ppt_extractor:
             logger.info("Pipeline 2 (PPT+): Processing Visuals from PPT with High Fidelity...")
