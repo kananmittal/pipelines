@@ -1,10 +1,10 @@
 import os
 import logging
-from pipelines.advanced.pipeline2_consolidation_ppt import Pipeline2ConsolidationPPT
-from pipelines.advanced.pipeline3_parallel_ppt import Pipeline3ParallelPPT
-from pipelines.advanced.pipeline5_consolidation_ppt import Pipeline5ConsolidationPPT
-from pipelines.advanced.pipeline1_direct import Pipeline1Direct
-from pipelines.advanced.pipeline4_iterative import Pipeline4Iterative
+from CS50_pipelines.pipeline2_consolidation_ppt import Pipeline2ConsolidationPPT
+from CS50_pipelines.pipeline3_parallel_ppt import Pipeline3ParallelPPT
+from CS50_pipelines.pipeline5_consolidation_ppt import Pipeline5ConsolidationPPT
+from CS50_pipelines.pipeline1_direct import Pipeline1Direct
+from CS50_pipelines.pipeline4_iterative import Pipeline4Iterative
 
 # Configure Logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -17,8 +17,10 @@ def get_data_folders(data_root="data"):
         return []
         
     folders = [f for f in os.listdir(data_root) if os.path.isdir(os.path.join(data_root, f))]
+    # Filter only digit folders for edudata
+    folders = [f for f in folders if f.isdigit()]
     # Sort for consistent execution order
-    return sorted(folders)
+    return sorted(folders, key=int)
 
 def run_batch_execution():
     """Run all 3 pipelines on every dataset folder"""
