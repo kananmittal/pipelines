@@ -403,11 +403,16 @@ class MultiPassVLMExtractor:
         try:
             from qwen_vl_utils import process_vision_info
             
+            # Prevent CUDA OOM by downscaling massive multi-megapixel images
+            # (OCR still gets the 2.5x high-res version, but VLM gets a compressed view)
+            safe_image = image.copy()
+            safe_image.thumbnail((1024, 1024))
+            
             messages = [
                 {
                     "role": "user",
                     "content": [
-                        {"type": "image", "image": image},
+                        {"type": "image", "image": safe_image},
                         {"type": "text", "text": prompt}
                     ]
                 }
