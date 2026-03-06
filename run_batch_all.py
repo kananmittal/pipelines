@@ -16,20 +16,23 @@ def get_data_folders(data_root="edudata"):
         logger.error(f"Data directory '{data_root}' not found!")
         return []
         
+    # Support both digit folders (edudata/0) and named folders (definedgedata/degrees)
     folders = [f for f in os.listdir(data_root) if os.path.isdir(os.path.join(data_root, f))]
-    # Filter only digit folders for edudata
-    folders = [f for f in folders if f.isdigit()]
-    # Sort for consistent execution order
-    sorted_folders = sorted(folders, key=int)
-    # Slice to only return the first element
-    return sorted_folders[0:1]
-
-def run_batch_execution():
-    """Run all 3 pipelines on every dataset folder"""
     
-    data_folders = get_data_folders("edudata")
+    # Sort folders (try numeric first for edudata, fallback to alphabetical for definedgedata)
+    try:
+        sorted_folders = sorted(folders, key=int)
+    except ValueError:
+        sorted_folders = sorted(folders)
+        
+    return sorted_folders
+
+def run_batch_execution(target_directory="definedgedata"):
+    """Run all 5 pipelines on every dataset folder"""
+    
+    data_folders = get_data_folders(target_directory)
     if not data_folders:
-        logger.warning("No data folders found in 'edudata/' directory.")
+        logger.warning(f"No data folders found in '{target_directory}/' directory.")
         return
 
     logger.info(f"🚀 Found {len(data_folders)} datasets: {data_folders}")
@@ -39,7 +42,7 @@ def run_batch_execution():
     # Given 20GB VRAM + 128GB RAM (Offloading), we should try to keep one pipeline loaded at a time)
     
     for folder_name in data_folders:
-        full_folder_path = os.path.abspath(os.path.join("edudata", folder_name))
+        full_folder_path = os.path.abspath(os.path.join(target_directory, folder_name))
         logger.info(f"\n{'='*60}")
         logger.info(f"📂 PROCESSING DATASET: {folder_name}")
         logger.info(f"{'='*60}")
@@ -103,7 +106,8 @@ def run_batch_execution():
 if __name__ == "__main__":
     print("🚀 Starting Master Batch Execution...")
     try:
-        run_batch_execution()
+        # User requested to run on definedgedata
+        run_batch_execution(target_directory="definedgedata")
     except KeyboardInterrupt:
         print("\n🛑 Execution Interrupted by User.")
     except Exception as e:

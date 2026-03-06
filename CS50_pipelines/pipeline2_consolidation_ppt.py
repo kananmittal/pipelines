@@ -1001,7 +1001,8 @@ class Pipeline2ConsolidationPPT:
                 
                 for candidate in edudata_dir_candidates:
                     if os.path.exists(candidate):
-                        subs = [os.path.join(candidate, d) for d in os.listdir(candidate) if os.path.isdir(os.path.join(candidate, d)) and d.isdigit()]
+                        # Accept any valid subdirectory instead of just digits
+                        subs = [os.path.join(candidate, d) for d in os.listdir(candidate) if os.path.isdir(os.path.join(candidate, d))]
                         # Prioritize a folder that actually has a ppt.pdf file in it
                         valid_subs = [s for s in subs if os.path.exists(os.path.join(s, "ppt.pdf")) or os.path.exists(os.path.join(s, "presentation.pdf"))]
                         print(f"----> [DEBUG] Found valid_subs with ppt.pdf: {valid_subs}")
