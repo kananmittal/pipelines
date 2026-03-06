@@ -10,11 +10,21 @@ from CS50_pipelines.pipeline4_iterative import Pipeline4Iterative
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-def get_data_folders(data_root="edudata"):
-    """Get all subfolders in the edudata directory"""
+def get_data_folders(target_directory="definedgedata"):
+    """Get all subfolders in the target directory"""
+    
+    # Ensure we look relative to where this script is located, not where the user terminal is
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    data_root = os.path.join(base_dir, target_directory)
+    
     if not os.path.exists(data_root):
-        logger.error(f"Data directory '{data_root}' not found!")
-        return []
+        # Fallback to looking inside 'data' just in case
+        fallback_root = os.path.join(base_dir, "data", target_directory)
+        if os.path.exists(fallback_root):
+             data_root = fallback_root
+        else:
+             logger.error(f"Data directory '{data_root}' not found!")
+             return []
         
     # Support both digit folders (edudata/0) and named folders (definedgedata/degrees)
     folders = [f for f in os.listdir(data_root) if os.path.isdir(os.path.join(data_root, f))]
@@ -41,8 +51,14 @@ def run_batch_execution(target_directory="definedgedata"):
     # but be careful about VRAM usage. If VRAM is tight, we might need to load/unload inside the loop.
     # Given 20GB VRAM + 128GB RAM (Offloading), we should try to keep one pipeline loaded at a time)
     
+    # Fix the full_folder_path calculation to use absolute base directory
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    target_path = os.path.join(base_dir, target_directory)
+    if not os.path.exists(target_path):
+         target_path = os.path.join(base_dir, "data", target_directory)
+         
     for folder_name in data_folders:
-        full_folder_path = os.path.abspath(os.path.join(target_directory, folder_name))
+        full_folder_path = os.path.join(target_path, folder_name)
         logger.info(f"\n{'='*60}")
         logger.info(f"📂 PROCESSING DATASET: {folder_name}")
         logger.info(f"{'='*60}")
