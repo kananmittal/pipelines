@@ -29,6 +29,11 @@ def get_data_folders(target_directory="definedgedata"):
     # Support both digit folders (edudata/0) and named folders (definedgedata/degrees)
     folders = [f for f in os.listdir(data_root) if os.path.isdir(os.path.join(data_root, f))]
     
+    # If there are no subfolders, treat the root directory itself as the only target
+    if not folders:
+        # We represent the root directory using an empty string or '.' so os.path.join resolves safely
+        return ['']
+    
     # Sort folders (try numeric first for edudata, fallback to alphabetical for definedgedata)
     try:
         sorted_folders = sorted(folders, key=int)
@@ -58,14 +63,20 @@ def run_batch_execution(target_directory="definedgedata"):
          target_path = os.path.join(base_dir, "data", target_directory)
          
     for folder_name in data_folders:
-        full_folder_path = os.path.join(target_path, folder_name)
+        if folder_name == '':
+             full_folder_path = target_path
+             display_name = target_directory
+        else:
+             full_folder_path = os.path.join(target_path, folder_name)
+             display_name = folder_name
+             
         logger.info(f"\n{'='*60}")
-        logger.info(f"📂 PROCESSING DATASET: {folder_name}")
+        logger.info(f"📂 PROCESSING DATASET: {display_name}")
         logger.info(f"{'='*60}")
         
         # --- PIPELINE 1 ---
         try:
-            logger.info(f"▶️ Starting Pipeline 1 (Visual Direct) for {folder_name}...")
+            logger.info(f"▶️ Starting Pipeline 1 (Visual Direct) for {display_name}...")
             p1 = Pipeline1Direct()
             res1 = p1.run_pipeline(target_folder=full_folder_path)
             # p1 doesn't have a save_results explicitly listed in BasePipeline if it doesn't inherit it, but let's assume it does or we just let it run.
@@ -73,51 +84,51 @@ def run_batch_execution(target_directory="definedgedata"):
                 p1.save_results(res1)
             del p1
         except Exception as e:
-            logger.error(f"❌ Pipeline 1 Failed for {folder_name}: {e}")
+            logger.error(f"❌ Pipeline {1} Failed for {display_name}: {e}")
             
         # --- PIPELINE 2 ---
         try:
-            logger.info(f"▶️ Starting Pipeline 2 (Consolidation) for {folder_name}...")
+            logger.info(f"▶️ Starting Pipeline {2} (Consolidation) for {display_name}...")
             p2 = Pipeline2ConsolidationPPT()
             res2 = p2.run_pipeline(target_folder=full_folder_path) 
             p2.save_results(res2)
             del p2
             
         except Exception as e:
-            logger.error(f"❌ Pipeline 2 Failed for {folder_name}: {e}")
+            logger.error(f"❌ Pipeline {2} Failed for {display_name}: {e}")
 
         # --- PIPELINE 3 ---
         try:
-            logger.info(f"▶️ Starting Pipeline 3 (Parallel) for {folder_name}...")
+            logger.info(f"▶️ Starting Pipeline {3} (Parallel) for {display_name}...")
             p3 = Pipeline3ParallelPPT()
             res3 = p3.run_pipeline(target_folder=full_folder_path)
             p3.save_results(res3)
             del p3
             
         except Exception as e:
-            logger.error(f"❌ Pipeline 3 Failed for {folder_name}: {e}")
+            logger.error(f"❌ Pipeline {3} Failed for {display_name}: {e}")
 
         # --- PIPELINE 4 ---
         try:
-            logger.info(f"▶️ Starting Pipeline 4 (Iterative) for {folder_name}...")
+            logger.info(f"▶️ Starting Pipeline {4} (Iterative) for {display_name}...")
             p4 = Pipeline4Iterative()
             res4 = p4.run_pipeline(target_folder=full_folder_path)
             if hasattr(p4, 'save_results'):
                 p4.save_results(res4)
             del p4
         except Exception as e:
-            logger.error(f"❌ Pipeline 4 Failed for {folder_name}: {e}")
+            logger.error(f"❌ Pipeline {4} Failed for {display_name}: {e}")
 
         # --- PIPELINE 5 ---
         try:
-            logger.info(f"▶️ Starting Pipeline 5 (Current SOTA) for {folder_name}...")
+            logger.info(f"▶️ Starting Pipeline {5} (Current SOTA) for {display_name}...")
             p5 = Pipeline5ConsolidationPPT()
             res5 = p5.run_pipeline(target_folder=full_folder_path)
             p5.save_results(res5)
             del p5
             
         except Exception as e:
-            logger.error(f"❌ Pipeline 5 Failed for {folder_name}: {e}")
+            logger.error(f"❌ Pipeline {5} Failed for {display_name}: {e}")
 
 if __name__ == "__main__":
     print("🚀 Starting Master Batch Execution...")
