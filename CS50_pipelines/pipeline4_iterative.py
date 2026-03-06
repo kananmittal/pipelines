@@ -96,8 +96,14 @@ class Pipeline4Iterative:
         pdf_path = os.path.join(self.current_folder, "ppt.pdf")
         if not os.path.exists(pdf_path):
              pdf_path = os.path.join(self.current_folder, "presentation.pdf")
-        
-        visual_critique = "No visual evidence available."
+             if not os.path.exists(pdf_path):
+                 # Fallback: grab the first .pdf file in the folder
+                 pdf_files = [f for f in os.listdir(self.current_folder) if f.lower().endswith('.pdf')]
+                 if pdf_files:
+                     pdf_path = os.path.join(self.current_folder, pdf_files[0])
+                     logger.info(f"Using auto-detected PDF for visuals: {pdf_path}")
+                 else:
+                     pdf_path = "/nonexistent/path/for/safety.pdf" # will fail the next check gracefully
         if os.path.exists(pdf_path):
             vp = VisionProcessor()
             ollama = OllamaInterface()

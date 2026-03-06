@@ -86,8 +86,14 @@ class Pipeline1Direct:
              # Try presentation.pdf
              pdf_path = os.path.join(self.current_folder, "presentation.pdf")
              if not os.path.exists(pdf_path):
-                 logger.error(f"PPT file not found at {self.current_folder}")
-                 return "Error: ppt.pdf not found."
+                 # Fallback: grab the first .pdf file in the folder
+                 pdf_files = [f for f in os.listdir(self.current_folder) if f.lower().endswith('.pdf')]
+                 if pdf_files:
+                     pdf_path = os.path.join(self.current_folder, pdf_files[0])
+                     logger.info(f"Using auto-detected PDF for visuals: {pdf_path}")
+                 else:
+                     logger.error(f"No PDF file found at {self.current_folder} for visual extraction.")
+                     return "Error: No PDF found."
             
         # 1. Convert PDF to Images
         logger.info(f"Loading slides from: {pdf_path}")

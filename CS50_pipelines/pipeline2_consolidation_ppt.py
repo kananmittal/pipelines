@@ -1028,6 +1028,17 @@ class Pipeline2ConsolidationPPT:
                 path = os.path.join(self.current_folder, fname)
                 if os.path.exists(path):
                     return path
+            
+            # Auto-fallback: If we need a visual document and couldn't find a named match, grab any .pdf
+            if file_type == "ppt":
+                try:
+                    pdf_files = [f for f in os.listdir(self.current_folder) if f.lower().endswith('.pdf')]
+                    if pdf_files:
+                        logger.info(f"Using auto-detected PDF for {file_type}: {pdf_files[0]}")
+                        return os.path.join(self.current_folder, pdf_files[0])
+                except Exception as e:
+                    pass
+                    
             return None
 
         # Load Inputs
